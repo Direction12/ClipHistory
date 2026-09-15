@@ -182,7 +182,19 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
     const img = document.createElement('img');
     img.className = 'card__thumb-img';
     img.alt = '图片条目';
-    img.src = './assets/placeholder-thumb.png';
+    img.loading = 'lazy';
+
+    const fileName = entry.image.file.replace(/^images[\\/]/, '');
+    if (entry.imageAvailable === false) {
+      // 文件已丢失：显示占位图，并由下方逻辑标注「图片已丢失」
+      img.src = './assets/placeholder-thumb.png';
+    } else {
+      // 经主进程注册的只读协议读取；渲染层拿不到也不需要文件系统路径
+      img.src = `clipimg://${fileName}`;
+      img.addEventListener('error', () => {
+        img.src = './assets/placeholder-thumb.png';
+      });
+    }
     thumb.appendChild(img);
   } else {
     thumb.textContent = '文';

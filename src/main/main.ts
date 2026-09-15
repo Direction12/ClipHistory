@@ -5,7 +5,7 @@
  * 各阶段分工：存储层（Phase 2）、采集与清理（Phase 3）、窗口/托盘/IPC（Phase 4）。
  */
 
-import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, protocol, shell } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -27,6 +27,7 @@ import { createPasteService, type ClipboardWriter } from './paste';
 import { ensureDataDirs, resolveDataPaths, type DataPaths } from './paths';
 import { loadSettings, updateSettings as persistSettings, type SettingsSeed } from './settings';
 import { runIntegrationSmokeTest } from './smoke';
+import { IMAGE_PROTOCOL, registerImageProtocol } from './thumbnails';
 import { ClipStore } from './store';
 import { createTray, type TrayHandle } from './tray';
 
@@ -44,6 +45,20 @@ let trayHandle: TrayHandle | null = null;
 
 /** 记录采集过程中的异常，供诊断接口暴露 */
 let lastWatcherError: string | null = null;
+
+/**
+ * 声明 clipimg 为特权 scheme。
+ *
+ * **必须在 app ready 之前调用**，否则协议注册会失败。
+ * 属性含义：standard（正常 URL 解析）/ secure（视为安全来源，
+ * 能被 CSP 的 img-src 与 fetch 正常使用）/ supportFetchAPI / stream。
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: IMAGE_PROTOCOL,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
+]);
 
 /**
  * 进程级兜底日志。
@@ -562,6 +577,28 @@ function runSmokeTestIfRequested(): void {
           },
           evaluateInRenderer: (expression: string) =>
             window.webContents.executeJavaScript(expression) as Promise<unknown>,
+          layoutProbe: async () => {
+            // 缩到最小宽度后核对真实布局：这是「360px 下不横向滚动」唯一的实证方式
+            if (mainWindow === null || mainWindow.isDestroyed()) {
+              return { ok: false, detail: '窗口不存在' };
+            }
+            const original = mainWindow.getBounds();
+            mainWindow.setBounds({ ...original, width: MIN_WINDOW_WIDTH });
+            await new Promise((resolve) => setTimeout(resolve, 250));
+
+            const measured = (await mainWindow.webContents.executeJavaScript(
+              '({ w: document.documentElement.clientWidth, scrollW: document.documentElement.scrollWidth, bodyScrollW: document.body.scrollWidth })',
+            )) as { w: number; scrollW: number; bodyScrollW: number };
+
+            mainWindow.setBounds(original);
+            await new Promise((resolve) => setTimeout(resolve, 150));
+
+            const overflow = Math.max(measured.scrollW, measured.bodyScrollW) - measured.w;
+            return {
+              ok: overflow <= 2,
+              detail: `最小宽度 ${String(measured.w)}px，内容宽 ${String(Math.max(measured.scrollW, measured.bodyScrollW))}px`,
+            };
+          },
           focusProbe: async () => {
             // 让本窗口先退到后面，再验证「能否把焦点切回上一个窗口」。
             // 这是自动粘贴的核心机制：切不回去，按键就会打进错误的窗口（C-14）。
@@ -623,6 +660,10 @@ if (!gotSingleInstanceLock) {
   void app.whenReady().then(() => {
     app.setAppUserModelId(APP_ID);
     initializeStorageAndWatcher();
+    // 缩略图协议：让渲染层能安全地显示真实图片（见 src/main/thumbnails.ts）
+    if (dataPaths !== null) {
+      registerImageProtocol({ paths: dataPaths });
+    }
     initializeTray();
     registerIpcHandlers();
     createMainWindow();

@@ -43,6 +43,8 @@ export interface SmokeContext {
    * 不注入时跳过该项检查。
    */
   readonly focusProbe?: () => Promise<{ ok: boolean; detail: string }>;
+  /** 自检「缩到最小宽度后是否横向溢出」；由 main 注入真实实现 */
+  readonly layoutProbe?: () => Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface SmokeResult {
@@ -57,7 +59,7 @@ const SMOKE_TEXT = '集成自检文本 Alpha 42';
  * 执行集成自检。返回通过/失败项，由调用方决定退出码。
  */
 export async function runIntegrationSmokeTest(context: SmokeContext): Promise<SmokeResult> {
-  const { store, watcher, deps, log, evaluateInRenderer, focusProbe } = context;
+  const { store, watcher, deps, log, evaluateInRenderer, focusProbe, layoutProbe } = context;
   const failures: string[] = [];
   let passed = 0;
 
@@ -420,6 +422,11 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     check(result.ok, `能把焦点切回上一个窗口（${result.detail}）`);
   }
 
+  if (layoutProbe !== undefined) {
+    const result = await layoutProbe();
+    check(result.ok, `缩到最小宽度后无横向溢出（${result.detail}）`);
+  }
+
   // ---- 卡片固定提供「粘贴」与「复制」两个按钮（需求 CH-01：不再有粘贴模式设置）----
   const buttonLabels = (await evaluateInRenderer(
     "Array.from(document.querySelectorAll('.card__actions button')).map((b) => b.textContent)",
@@ -521,6 +528,61 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     (selectionStyle?.borderColor ?? '').includes('247, 168, 188') ||
     (selectionStyle?.background ?? '').includes('253, 227, 234');
   check(hasVisibleSelectionStyle, `选中态有可见样式（描边 ${String(selectionStyle?.borderColor)}）`);
+
+  // ---- 缩略图协议：真实取图 + 路径穿越必须被拒（C-17）----
+  //
+  // 用 <img> 而不是 fetch 来验证：应用本身就是用 <img> 加载缩略图的，
+  // 而且 CSP 里 connect-src 为 'none'（刻意收紧），fetch 会被挡掉 —— 那是 CSP 生效，
+  // 不是协议有问题。用真实路径验证才说明问题。
+  const imageEntry = store.list({ kind: 'image' })[0] ?? null;
+  if (imageEntry !== null && imageEntry.image !== undefined) {
+    const fileName = imageEntry.image.file.replace(/^images[\\/]/, '');
+
+    const thumbExpression = [
+      '(async () => {',
+      '  const load = (src) => new Promise((resolve) => {',
+      '    const img = new Image();',
+      '    img.onload = () => resolve({ ok: true });',
+      '    img.onerror = () => resolve({ ok: false });',
+      '    img.src = src;',
+      '    setTimeout(() => resolve({ ok: false, timedOut: true }), 3000);',
+      '  });',
+      "  const good = await load('clipimg://" + '__FILE__' + "');",
+      "  const evil = await load('clipimg://..%2F..%2Findex.ndjson');",
+      '  return { good, evil };',
+      '})()',
+    ].join('\n');
+
+    if (!thumbExpression.includes('__FILE__')) {
+      throw new Error('缩略图自检表达式构造失败：缺少占位符');
+    }
+
+    const thumbProbe = (await evaluateInRenderer(
+      thumbExpression.split('__FILE__').join(fileName),
+    )) as { good?: { ok: boolean }; evil?: { ok: boolean } } | undefined;
+
+    check(thumbProbe?.good?.ok === true, `缩略图能通过 <img> 取到真实图片（file=${fileName}）`);
+    check(
+      thumbProbe?.evil?.ok === false,
+      '越界图片请求被拒绝（安全闸门有效）',
+    );
+  } else {
+    check(false, '应存在一条图片条目用于缩略图协议测试');
+  }
+
+  // ---- 最小宽度 360px 下不横向滚动（设计规范 §9）----
+  //
+  // 用户拖窄窗口或系统缩放到 200% 时，横向滚动条会让界面显得很糟；
+  // 这里用真实布局数据判定，而不是靠肉眼看。
+  const layoutResult = (await evaluateInRenderer(
+    "(() => ({ w: document.documentElement.clientWidth, scrollW: document.documentElement.scrollWidth, bodyScrollW: document.body.scrollWidth }))()",
+  )) as { w: number; scrollW: number; bodyScrollW: number } | undefined;
+  check(
+    layoutResult !== undefined &&
+      layoutResult.scrollW <= layoutResult.w + 1 &&
+      layoutResult.bodyScrollW <= layoutResult.w + 1,
+    `当前窗口宽度下无横向溢出（窗口 ${String(layoutResult?.w)}px，内容 ${String(layoutResult?.scrollW)}px）`,
+  );
 
   return { passed, failed: failures };
 }

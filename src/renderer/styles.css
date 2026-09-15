@@ -113,6 +113,8 @@ body {
   padding: 0 var(--space-3);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
+  /* 窄窗口下允许子项收缩，否则会撑出横向滚动条（设计规范 §9 要求 360px 不横向滚动） */
+  min-width: 0;
 }
 
 .search {
@@ -156,11 +158,28 @@ body {
 /* ===== 分段筛选 ===== */
 .segments {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
   background: var(--color-bg);
+}
+
+/* 窄窗口下收紧分段内边距，为搜索框让出空间 */
+@media (max-width: 400px) {
+  .segment {
+    padding: 0 var(--space-2);
+  }
+
+  .topbar {
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+  }
+
+  .list {
+    padding: var(--space-2);
+  }
 }
 
 .segment {
@@ -224,6 +243,7 @@ body {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
+  min-width: 0;
   margin-bottom: var(--space-2);
   padding: var(--space-3);
   background: var(--color-surface);
@@ -350,6 +370,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
   padding: 0 var(--space-3);
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
@@ -361,6 +383,7 @@ body {
 }
 
 .status {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -422,6 +445,7 @@ body {
 .card__actions {
   display: flex;
   flex-wrap: wrap;
+  min-width: 0;
   gap: var(--space-1);
   margin-top: var(--space-2);
   /* 悬停或键盘聚焦时才显现，保持列表安静（见 docs/设计规范.md §6） */
