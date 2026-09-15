@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 纯本地应用，禁止外部资源加载与内联执行之外的任何来源（见 docs/编码规范.md §6） -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>历史粘贴</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="search">
+          <span class="search__icon" aria-hidden="true">🔍</span>
+          <input
+            id="search-input"
+            class="search__input"
+            type="search"
+            placeholder="搜索历史…"
+            aria-label="搜索历史"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="segments" role="group" aria-label="类型筛选">
+          <button class="segment is-active" type="button" data-filter="all" aria-pressed="true">全部</button>
+          <button class="segment" type="button" data-filter="text" aria-pressed="false">文字</button>
+          <button class="segment" type="button" data-filter="image" aria-pressed="false">图片</button>
+        </div>
+
+        <button id="settings-button" class="icon-button" type="button" title="设置" aria-label="设置">⚙️</button>
+      </header>
+
+      <main class="list" aria-label="剪贴板历史列表">
+        <div class="notice notice--info">
+          <strong>Phase 1 骨架</strong>
+          <span>界面框架与设计令牌已就位；剪贴板采集、存储与托盘将在 Phase 2–4 接入。</span>
+        </div>
+
+        <section class="group" aria-label="今天">
+          <h2 class="group__title">今天</h2>
+
+          <article class="card card--placeholder" aria-disabled="true">
+            <div class="card__thumb" aria-hidden="true">文</div>
+            <div class="card__body">
+              <div class="card__meta"><span class="card__time">示例 14:32</span></div>
+              <p class="card__preview">这里是文字条目的预览区域，最多显示两行，超出以省略号截断。</p>
+            </div>
+          </article>
+
+          <article class="card card--placeholder" aria-disabled="true">
+            <div class="card__thumb card__thumb--image" aria-hidden="true">图</div>
+            <div class="card__body">
+              <div class="card__meta">
+                <span class="card__time">示例 14:15</span>
+                <span class="card__sub">1920 × 1080 · 278 KB</span>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="empty" aria-label="空状态">
+          <div class="empty__icon" aria-hidden="true">📋</div>
+          <p class="empty__title">还没有记录，复制点东西试试</p>
+          <p class="empty__hint">应用在后台持续运行，你复制的文字和图片会自动出现在这里。</p>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <span id="bridge-status" class="status status--pending">正在检测通信通路…</span>
+        <span class="statusbar__spacer"></span>
+        <button id="ping-button" class="text-button" type="button">重新检测</button>
+      </footer>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

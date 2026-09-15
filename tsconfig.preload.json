@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "CommonJS",
+    "types": ["node"],
+    "outDir": "dist/preload-tmp",
+    "rootDir": "src"
+  },
+  "include": ["src/preload/**/*.ts", "src/shared/**/*.ts"]
+}

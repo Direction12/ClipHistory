@@ -1,0 +1,49 @@
+{
+  "name": "cliphistory",
+  "productName": "ClipHistory",
+  "version": "0.1.0",
+  "description": "历史粘贴（ClipHistory）—— Windows 本地剪贴板历史工具，记录文字与图片",
+  "private": true,
+  "license": "MIT",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer-build.json",
+    "build:main": "tsc -p tsconfig.node.json",
+    "build:preload": "node scripts/build-preload.mjs",
+    "build:renderer": "tsc -p tsconfig.renderer-build.json && node scripts/copy-static.mjs",
+    "build": "node scripts/build-all.mjs",
+    "dev": "node scripts/build-all.mjs && node scripts/run-electron.mjs",
+    "smoke": "node scripts/build-all.mjs && node scripts/run-electron.mjs --smoke",
+    "start": "npm run dev",
+    "gen:icons": "node scripts/generate-icons.mjs",
+    "dist": "node scripts/build-all.mjs && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.direction.cliphistory",
+    "productName": "ClipHistory",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "26.5.1",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2"
+  }
+}
