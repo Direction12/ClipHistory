@@ -6,6 +6,7 @@
  */
 
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   APP_ID,
@@ -20,7 +21,8 @@ import type { PasteMode, Settings, WindowBounds } from '../shared/types';
 import { ClipboardWatcher, createElectronClipboardSource } from './clipboard-watcher';
 import { CleanupScheduler } from './cleanup';
 import { createIpcHandlers, invokeSafely, type IpcDeps } from './ipc';
-import { createPasteService } from './paste';
+import { runCommand, sendPasteKeys, writePngToClipboard } from './native-clipboard';
+import { createPasteService, type ClipboardWriter } from './paste';
 import { ensureDataDirs, resolveDataPaths, type DataPaths } from './paths';
 import { loadSettings, updateSettings as persistSettings, type SettingsSeed } from './settings';
 import { runIntegrationSmokeTest } from './smoke';
@@ -93,6 +95,29 @@ function applySettingsSeed(seed: SettingsSeed): Settings {
   for (const warning of warnings) {
     console.warn(`设置告警：${warning}`);
   }
+  return settings;
+}
+
+/**
+ * 设置变更后通知渲染层重读。
+ *
+ * 为什么必须广播：设置会影响界面呈现（例如 pasteMode 决定卡片主按钮是「复制」还是「粘贴」），
+ * 若不通知，用户改完设置得等下一次列表刷新才看到变化 —— 表现为「改了没反应」。
+ * 渲染层收到后统一重读设置（见 src/renderer/main.ts 的 onWatcherState）。
+ */
+function notifySettingsChanged(): void {
+  mainWindow?.webContents.send(IPC_EVENT.watcherState, { settingsChanged: true });
+}
+
+/**
+ * 用户主动改设置的入口：写入后广播给渲染层刷新。
+ *
+ * 与 `applySettingsSeed` 的区别：后者还会被主进程内部调用（例如保存窗口位置），
+ * 那类改动不需要惊动界面，故只在用户路径上广播。
+ */
+function applyUserSettingsSeed(seed: SettingsSeed): Settings {
+  const settings = applySettingsSeed(seed);
+  notifySettingsChanged();
   return settings;
 }
 
@@ -334,22 +359,57 @@ function applyPausedState(paused: boolean): void {
 }
 
 function buildIpcDeps(): IpcDeps {
+  const nativeOptions = { run: runCommand };
+
+  const clipboardWriter: ClipboardWriter = {
+    writeText: (text: string) => clipboard.writeText(text),
+    // 图片必须走 Windows 原生剪贴板：Electron 的 write() 对图片会「成功但没写进去」（见 C-05）
+    writeImagePng: (pngBytes: Buffer) => writePngToClipboard(pngBytes, nativeOptions),
+  };
+
   const paste = createPasteService({
     store: {
       // paste 只需要「按 id 取详情」这一项能力，故只注入这个函数而非整个 store
       getDetail: (id: string) => store?.getDetail(id) ?? null,
     },
-    clipboard,
+    clipboard: clipboardWriter,
+    readImageBytes: async (relativePath: string) => {
+      const currentStore = store;
+      if (currentStore === null) {
+        return null;
+      }
+      // 复用 store 的路径校验（拒绝越界路径），避免这里成为绕过点
+      const absolute = currentStore.imageAbsolutePathFromRelative(relativePath);
+      if (absolute === null) {
+        return null;
+      }
+      try {
+        return await readFile(absolute);
+      } catch {
+        return null;
+      }
+    },
+    sendPasteKeys: () => sendPasteKeys(nativeOptions),
+    hideAppWindow: async () => {
+      // 隐藏本窗口，让焦点回落到用户原本的程序；否则 Ctrl+V 会打到自己身上
+      mainWindow?.hide();
+    },
+    showAppWindow: () => {
+      if (mainWindow !== null && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+      }
+    },
     onSelfWrite: () => {
       watcher?.markSelfWrite();
     },
     getPasteMode: (): PasteMode => readCurrentSettings().pasteMode,
+    wait: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   return {
     getStore: () => store,
     readSettings: readCurrentSettings,
-    updateSettings: applySettingsSeed,
+    updateSettings: applyUserSettingsSeed,
     setPaused: applyPausedState,
     isPaused: () => watcher?.isPaused ?? readCurrentSettings().paused,
     isWatcherRunning: () => watcher?.isRunning ?? false,

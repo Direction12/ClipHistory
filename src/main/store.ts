@@ -427,10 +427,23 @@ export class ClipStore {
   /** 读取图片绝对路径；文件不存在时返回 null（界面显示占位图） */
   imageAbsolutePath(meta: ClipEntryMeta): string | null {
     const relative = meta.image?.file;
-    if (relative === undefined || !isSafeRelativePath(relative)) {
+    if (relative === undefined) {
       return null;
     }
-    const absolute = join(this.paths.root, relative);
+    return this.imageAbsolutePathFromRelative(relative);
+  }
+
+  /**
+   * 按索引里的相对路径解析出图片绝对路径。
+   *
+   * 用于「写回剪贴板」等需要读取图片字节的场景；路径仍走 `isSafeRelativePath`
+   * 校验，确保相对路径无法越出数据目录（见 docs/编码规范.md §2）。
+   */
+  imageAbsolutePathFromRelative(relativePath: string): string | null {
+    if (!isSafeRelativePath(relativePath)) {
+      return null;
+    }
+    const absolute = join(this.paths.root, relativePath);
     return existsSync(absolute) ? absolute : null;
   }
 

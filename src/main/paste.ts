@@ -1,12 +1,20 @@
 /**
- * 剪贴板写回（复制）。
+ * 剪贴板写回（复制）与自动粘贴。
  *
- * 唯一真源：docs/需求规格说明书.md FR-06（防自触发）、docs/技术方案.md C-05。
+ * 唯一真源：docs/需求规格说明书.md FR-06/FR-13、docs/技术方案.md C-05、LIM-01。
  *
- * **Electron 44 的写回是异步的**：`writeText()` 等返回 Promise，
- * 且 `writeImage()` 已被移除（见 C-05）。
- * 本阶段（Phase 4）实现**文本**写回；图片写回依赖 Phase 5 的修订方案，
- * 此处必须返回明确的失败原因，不得假装成功（契约纪律 5）。
+ * ## 两条经运行时实测得出的关键结论（不要再按「直觉」改回去）
+ *
+ * 1. **文字**：Electron 的 `clipboard.writeText()` 可用。
+ * 2. **图片**：**Electron 自身无法真正写入图片**。`clipboard.write()` 配合
+ *    `new (require('electron').ClipboardItem)({ 'image/png': blob })` 会**返回成功但实际没写进去**
+ *    （读回时该 ClipboardItem 的 types 为空，`getType('image/png')` 报找不到）。
+ *    因此图片必须走 **Windows 原生剪贴板**：PowerShell 加载 PNG → Bitmap → `Clipboard::SetImage`。
+ *    实测该方式读回 `has('image/png') === true` 且 PNG 字节可完整还原。
+ *
+ * ## 自动粘贴
+ * 隐藏本窗口 → 等焦点回落到原程序 → 用 PowerShell SendKeys 发送 Ctrl+V。
+ * 提权窗口收不到模拟按键（LIM-01），此时如实告知用户手动粘贴，**不假装成功**。
  */
 
 import type {
@@ -17,47 +25,97 @@ import type {
   PasteService,
 } from '../shared/types';
 
-/** 与 Electron 44 `clipboard` 对齐的最小写入接口（异步） */
-export interface ElectronClipboardWriter {
-  writeText(text: string): Promise<void> | void;
+/** 写回剪贴板的能力；两处实现分别为 Electron（文本）与 Windows 原生（图片） */
+export interface ClipboardWriter {
+  /** 写文本：Electron 的 writeText */
+  writeText(text: string): Promise<void>;
+  /**
+   * 写图片（PNG 字节）：必须走 Windows 原生剪贴板。
+   * 返回失败原因表示未写入成功。
+   */
+  writeImagePng(pngBytes: Buffer): Promise<OperationResult>;
 }
 
-/** paste 只需要「按 id 取详情」这一项能力（最小权限） */
+/** 只需要「按 id 取详情」这一项能力（最小权限） */
 export interface EntryDetailReader {
   getDetail(id: string): ClipEntryDetail | null;
 }
 
+/**
+ * 按索引里的相对路径读取图片字节。
+ *
+ * 为什么需要它：Phase 4 冻结的 IPC 契约只回相对路径（避免把图片数据塞进 IPC），
+ * 因此写回图片时需要主进程按路径读文件。抽成接口便于测试注入。
+ */
+export type ImageBytesReader = (relativePath: string) => Promise<Buffer | null>;
+
 export interface PasteServiceOptions {
   readonly store: EntryDetailReader;
-  readonly clipboard: ElectronClipboardWriter;
+  readonly clipboard: ClipboardWriter;
+  readonly readImageBytes: ImageBytesReader;
+  /** 发送 Ctrl+V 到当前前台窗口 */
+  readonly sendPasteKeys: () => Promise<OperationResult>;
+  /** 隐藏本应用窗口，使焦点回落到用户原本的窗口 */
+  readonly hideAppWindow: () => Promise<void>;
+  /** 重新显示本应用窗口（自动粘贴后把界面还回来） */
+  readonly showAppWindow: () => void;
   /**
    * 通知采集器「接下来这次剪贴板变化是本应用自己写回的」，避免被记成新条目（FR-06）。
-   * 原计划的「剪贴板序列号」判据在 Electron 44 已不可用（见 D-15），
-   * 因此改由这里显式声明。
+   * 原计划的「剪贴板序列号」判据在 Electron 44 已不可用（见 D-15），故改为显式声明。
    */
   readonly onSelfWrite: () => void;
-  /** 当前粘贴模式；用于 `paste:toActive` 返回给界面的提示 */
+  /** 当前粘贴模式；决定卡片主按钮是「复制」还是「复制并粘贴」 */
   readonly getPasteMode: () => PasteMode;
+  readonly wait: (ms: number) => Promise<void>;
 }
 
-/** 图片写回尚未实现时给出的固定说明（Phase 5 完成后删除） */
-const IMAGE_PASTE_PENDING = '图片写回将在后续版本提供（Electron 44 已移除 writeImage）';
+/** 隐藏窗口后等待焦点回落的时间（ms）。太短会粘贴到本窗口自己 */
+const FOCUS_HANDOFF_MS = 220;
+
+/** LIM-01：提权窗口无法接收模拟按键时的提示 */
+const ELEVATED_WINDOW_HINT =
+  '无法自动粘贴（目标窗口可能以管理员权限运行）。内容已复制到剪贴板，请按 Ctrl+V';
 
 export function createPasteService(options: PasteServiceOptions): PasteService {
-  const { store, clipboard, onSelfWrite, getPasteMode } = options;
+  const {
+    store,
+    clipboard,
+    readImageBytes,
+    sendPasteKeys,
+    hideAppWindow,
+    showAppWindow,
+    onSelfWrite,
+    getPasteMode,
+    wait,
+  } = options;
 
   /**
    * 把某条历史写回剪贴板。
    * 成功前**不**调用 onSelfWrite：写失败却提前声明自写回，会让真正的外部复制被漏记。
    */
-  async function writeEntry(id: string): Promise<OperationResult> {
+  async function writeEntryToClipboard(id: string): Promise<OperationResult> {
     const detail = store.getDetail(id);
     if (detail === null) {
       return { ok: false, error: '该条目可能已被删除，请刷新列表' };
     }
 
     if (detail.kind === 'image') {
-      return { ok: false, error: IMAGE_PASTE_PENDING };
+      const relativePath = detail.image?.file;
+      if (relativePath === undefined) {
+        return { ok: false, error: '该条目的图片信息缺失，无法复制' };
+      }
+
+      const pngBytes = await readImageBytes(relativePath);
+      if (pngBytes === null) {
+        return { ok: false, error: '该图片文件已丢失，无法复制' };
+      }
+
+      const written = await clipboard.writeImagePng(pngBytes);
+      if (!written.ok) {
+        return written;
+      }
+      onSelfWrite();
+      return { ok: true };
     }
 
     if (detail.text === undefined) {
@@ -77,29 +135,48 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
   }
 
   return {
-    writeEntryToClipboard: writeEntry,
+    writeEntryToClipboard,
 
     async pasteEntryToActiveWindow(id: string): Promise<PasteResult> {
       const mode = getPasteMode();
-      const copied = await writeEntry(id);
+      const copied = await writeEntryToClipboard(id);
 
       if (!copied.ok) {
         return { ok: false, mode, autoPasted: false, error: copied.error };
       }
 
-      // 「仅复制」模式下不尝试自动粘贴，这是用户的选择，不是失败
+      // 「仅复制」是用户的选择，不尝试自动粘贴，也不算失败
       if (mode === 'copyOnly') {
         return { ok: true, mode, autoPasted: false };
       }
 
-      // 自动粘贴（模拟 Ctrl+V）在 Phase 5 实现。
-      // 现在如实告知「已复制，需手动粘贴」，而不是假装已经粘贴。
-      return {
-        ok: true,
-        mode,
-        autoPasted: false,
-        notice: '已复制到剪贴板；自动粘贴将在后续版本提供，请按 Ctrl+V',
-      };
+      // 自动粘贴前必须先把窗口让出去，否则 Ctrl+V 会打到本应用自己身上
+      let hidWindow = false;
+      try {
+        await hideAppWindow();
+        hidWindow = true;
+        await wait(FOCUS_HANDOFF_MS);
+
+        const sent = await sendPasteKeys();
+        if (!sent.ok) {
+          return {
+            ok: true,
+            mode,
+            autoPasted: false,
+            notice: sent.error ?? ELEVATED_WINDOW_HINT,
+          };
+        }
+
+        return { ok: true, mode, autoPasted: true };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { ok: true, mode, autoPasted: false, notice: `${ELEVATED_WINDOW_HINT}（${reason}）` };
+      } finally {
+        // 无论成功失败都要把界面还给用户，否则应用就像消失了一样
+        if (hidWindow) {
+          showAppWindow();
+        }
+      }
     },
   };
 }

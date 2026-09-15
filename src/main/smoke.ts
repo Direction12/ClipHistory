@@ -132,6 +132,7 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
         settingsPanelExists: document.getElementById('settings-panel') !== null,
         confirmDialogExists: document.getElementById('confirm-dialog') !== null,
         confirmOkExists: document.getElementById('confirm-ok') !== null,
+        cardPrimaryLabel: (document.querySelector('.card__action--primary') || {}).textContent || '(无主按钮)',
       };
     })()
   `;
@@ -143,6 +144,7 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     settingsPanelExists: boolean;
     confirmDialogExists: boolean;
     confirmOkExists: boolean;
+    cardPrimaryLabel: string;
   }
 
   let uiState: UiState | undefined;
@@ -311,7 +313,7 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   const detail = (await call('getEntry', { id: targetId })) as ClipEntryDetail | null;
   check(detail?.id === targetId, '按 id 取详情');
 
-  // ---- 复制到剪贴板（文本条目）----
+  // ---- 复制到剪贴板（文本）----
   const textEntry = (store.list({ kind: 'text' })[0] ?? null) as { id: string } | null;
   if (textEntry !== null) {
     const copied = (await call('copyEntry', { id: textEntry.id })) as { ok: boolean; error?: string };
@@ -320,10 +322,14 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     check(false, '应存在一条文本条目用于复制测试');
   }
 
-  // 图片复制当前如实返回未实现，不得假装成功
+  // ---- 复制到剪贴板（图片）----
+  // 图片写回只能走 Windows 原生剪贴板（见技术方案 C-05），因此这条断言顺带验证了：
+  // IPC 契约 → store 读取 PNG 字节 → 路径越界校验 → 原生写入，整条链路是否连通。
   const imageCopy = (await call('copyEntry', { id: targetId })) as { ok: boolean; error?: string };
-  const imageCopyIsHonest = imageCopy.ok === false && (imageCopy.error ?? '').includes('后续版本');
-  check(imageCopyIsHonest, `图片复制如实返回未实现而非假装成功（${String(imageCopy.error)}）`);
+  check(
+    imageCopy.ok,
+    `图片条目可复制到剪贴板${imageCopy.error === undefined ? '' : `（错误：${imageCopy.error}）`}`,
+  );
 
   // ---- 删除 / 撤销 ----
   const removed = (await call('deleteEntry', { id: targetId })) as boolean;
@@ -389,6 +395,53 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   check(afterClear.pinned >= 1, `清空后置顶条目保留（${String(afterClear.pinned)} 条）`);
   check(afterClear.entries === afterClear.pinned, '清空后只剩置顶条目');
   check(clearResult.removed >= 1, `清空返回移除数量（${String(clearResult.removed)}）`);
+
+  // ---- 粘贴模式驱动主按钮文案（FR-13）----
+  // 放在最后：它会改设置，前面的断言依赖 retentionDays/pasteMode 的已知状态。
+  //
+  // 注意：渲染层的刷新是异步的（设置变更 → 重读设置 → 就地刷新按钮），
+  // 因此必须**轮询等待界面反映变更**，不能设完就立刻读 —— 那读到的是旧状态。
+  const readPrimaryLabel = `
+    (() => {
+      const button = document.querySelector('.card__action--primary');
+      return button === null ? '(无主按钮)' : button.textContent;
+    })()
+  `;
+
+  interface PrimaryProbe {
+    label: string;
+    mode: string;
+  }
+
+  const waitForPrimaryLabel = async (expected: string): Promise<{ label: string; mode: string }> => {
+    const deadline = Date.now() + 5_000;
+    let label = '(未读取)';
+    let mode = '(未读取)';
+    while (Date.now() < deadline) {
+      label = String(await evaluateInRenderer(readPrimaryLabel));
+      const settings = (await call('getSettings')) as { pasteMode: string };
+      mode = settings.pasteMode;
+      if (label === expected) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return { label, mode };
+  };
+
+  await call('updateSettings', { pasteMode: 'copyOnly' });
+  const copyOnlyProbe: PrimaryProbe = await waitForPrimaryLabel('复制');
+  check(
+    copyOnlyProbe.label === '复制',
+    `pasteMode=copyOnly 时主按钮显示「复制」（实际：${copyOnlyProbe.label}）`,
+  );
+
+  await call('updateSettings', { pasteMode: 'auto' });
+  const autoProbe: PrimaryProbe = await waitForPrimaryLabel('粘贴');
+  check(
+    autoProbe.label === '粘贴',
+    `pasteMode=auto 时主按钮显示「粘贴」（实际：${autoProbe.label}）`,
+  );
 
   return { passed, failed: failures };
 }

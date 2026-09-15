@@ -205,11 +205,14 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
       ? '复制到剪贴板（当前设置：仅复制）'
       : '复制并粘贴到当前窗口';
 
-  actions.appendChild(
-    createActionButton(primaryLabel, primaryTitle, () => {
-      void runPrimaryAction(entry);
-    }, 'card__action--primary'),
-  );
+  // 主按钮的文案与行为都由 pasteMode 决定（FR-13）。
+  // 这里保存按钮引用，便于设置变更时就地更新文案 —— 重建卡片会丢失按钮上的点击闭包。
+  const primaryButton = createActionButton(primaryLabel, primaryTitle, () => {
+    void runPrimaryAction(entry);
+  }, 'card__action--primary');
+  primaryButton.dataset.role = 'primary';
+  actions.appendChild(primaryButton);
+
   actions.appendChild(
     createActionButton('复制', '仅复制到剪贴板，不切换窗口', () => {
       void runCopy(entry);
@@ -333,8 +336,20 @@ async function reloadSettings(): Promise<void> {
       (diagnostics.damagedLines > 0 ? `· 跳过损坏行 ${String(diagnostics.damagedLines)}` : '');
   }
 
-  // 主按钮文案随粘贴模式变化，故需重绘列表
-  renderList();
+  // 粘贴模式可能刚被改过，就地刷新主按钮文案。
+  // 为什么是「就地刷新」而不是重绘列表：点击行为绑定在按钮元素上，
+  // 重绘虽能更新文案，但更重且容易与列表渲染状态脱节；就地改文字最小且确定。
+  syncPrimaryButtons();
+}
+
+/** 按当前 pasteMode 同步所有卡片主按钮的文案与提示 */
+function syncPrimaryButtons(): void {
+  const copyOnly = currentSettings?.pasteMode === 'copyOnly';
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-role="primary"]')) {
+    button.textContent = copyOnly ? '复制' : '粘贴';
+    button.title = copyOnly ? '复制到剪贴板（当前设置：仅复制）' : '复制并粘贴到当前窗口';
+    button.setAttribute('aria-label', button.title);
+  }
 }
 
 // ---------- 各操作 ----------
@@ -582,16 +597,12 @@ function setupSubscriptions(): void {
     void reload();
   });
   api().onWatcherState((state) => {
-    if (state.paused !== undefined) {
-      pausedBanner.hidden = !state.paused;
-      if (currentSettings !== null) {
-        currentSettings.paused = state.paused;
-      }
-    }
     if (state.openSettings === true) {
       settingsPanel.hidden = false;
-      void reloadSettings();
     }
+    // 主进程在「暂停状态变化」与「设置变更」时都会广播；
+    // 这里统一重读设置，避免两处各写一套刷新逻辑而漏掉一半（按钮文案曾因此不更新）。
+    void reloadSettings();
   });
 }
 
