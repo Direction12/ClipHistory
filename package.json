@@ -7,7 +7,8 @@
   "license": "MIT",
   "main": "dist/main/main.js",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer-build.json",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer-build.json && tsc -p tsconfig.test.json",
+    "test": "node test/run-tests.mjs",
     "build:main": "tsc -p tsconfig.node.json",
     "build:preload": "node scripts/build-preload.mjs",
     "build:renderer": "tsc -p tsconfig.renderer-build.json && node scripts/copy-static.mjs",

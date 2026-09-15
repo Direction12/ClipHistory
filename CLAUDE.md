@@ -7,7 +7,7 @@
 |---|---|
 | 项目 | 历史粘贴（内部名 ClipHistory）：Windows 本地剪贴板历史工具，记录文字与图片 |
 | 工作目录 | `C:\Users\Direction\Desktop\历史粘贴` |
-| 当前阶段 | **Phase 2 待确认**（Phase 0、Phase 1 已完成并提交） |
+| 当前阶段 | **Phase 3 待确认**（Phase 0–2 已完成并提交） |
 | 技术栈 | Electron 44 + TypeScript 7 + tsc 构建（**已弃用 Vite**，原因见 `docs/构建与运行.md` §2.2），纯本地文件存储 |
 
 ---
@@ -42,7 +42,7 @@
 | `src/main/` | 主进程：采集、存储、托盘、生命周期、IPC | 不操作 DOM |
 | `src/preload/` | 白名单 IPC 桥 | 不暴露 `ipcRenderer` 原始对象与 Node 模块 |
 | `src/renderer/` | 界面 | 不直接访问文件系统与剪贴板 |
-| `test/` | `node:test` 单元测试 | 只测纯逻辑，不启动 Electron |
+| `test/` | 单元测试（入口 `run-tests.mjs`，同进程 + 解析钩子） | 只测纯逻辑，不启动 Electron；每个用例自建自清临时目录 |
 | `assets/` | 图标资源 | Windows 需 `.ico` |
 | 数据目录 | `%APPDATA%\ClipHistory`（运行时） | **绝不**写入仓库或安装目录 |
 
@@ -120,3 +120,4 @@
 | 2026-09-15 | 建立本文件（Phase 0）：标准文件索引、目录约定、每阶段五步工作循环、开发护栏、已知限制 |
 | 2026-09-15 | Phase 0 完成：`CLAUDE.md` 经实测确认被 DSH 自动加载；首次提交 `8dbf44f`；阶段推进至 Phase 1 |
 | 2026-09-15 | Phase 1 完成：骨架跑通（类型检查全绿、构建完整、冒烟自检通过）。**弃用 Vite**（沙箱禁止进程派生），改为 tsc + 自写脚本；新增平台约束 C-01（preload 必须自包含）与 C-02（渲染层产物路径） |
+| 2026-09-15 | Phase 2 完成：存储层（`paths.ts` / `content.ts` / `settings.ts` / `store.ts`）并测透——65 个用例全绿。新增平台约束 C-03（测试需 `registerHooks` 自定义同进程入口，`node --test` 方案被证伪）与 C-04（`package.json` 必须保持 CommonJS） |
