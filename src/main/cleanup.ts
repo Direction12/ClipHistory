@@ -111,6 +111,10 @@ export class CleanupScheduler {
 
   /** 执行一次清理；返回本次结果（设置非法时为 null） */
   runOnce(trigger: CleanupTrigger): CleanupRun | null {
+    // 暂存区兜底：撤销窗口主要靠 store 自己的定时器，这里保证「定时器被系统挂起
+    // 或进程长时间空闲」时残留的暂存文件依然会被抹掉（见 docs/存储与数据格式规范.md §7.2）
+    this.store.purgeExpiredTrash(this.now());
+
     const run = runCleanup(this.store, this.getSettings(), this.now());
     if (run !== null) {
       this.onCleaned(run, trigger);

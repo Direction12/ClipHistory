@@ -8,7 +8,7 @@
  * （node:test，无 Electron）可以把数据目录指到临时目录后直接使用。
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { DATA_DIR_ENV_KEY } from '../shared/constants';
 
@@ -16,6 +16,8 @@ import { DATA_DIR_ENV_KEY } from '../shared/constants';
 export const SUBDIR_CONTENT = 'content';
 export const SUBDIR_IMAGES = 'images';
 export const SUBDIR_LOGS = 'logs';
+/** 撤销暂存区：删除后暂存原始文件，等撤销窗口过去再抹掉（见 docs/存储与数据格式规范.md §7.2） */
+export const SUBDIR_TRASH = 'trash';
 
 /** 索引与设置文件名 */
 export const INDEX_FILE = 'index.ndjson';
@@ -62,6 +64,7 @@ export interface DataPaths {
   readonly contentDir: string;
   readonly imagesDir: string;
   readonly logsDir: string;
+  readonly trashDir: string;
 }
 
 export function resolveDataPaths(root: string = resolveDataDir()): DataPaths {
@@ -72,11 +75,12 @@ export function resolveDataPaths(root: string = resolveDataDir()): DataPaths {
     contentDir: join(root, SUBDIR_CONTENT),
     imagesDir: join(root, SUBDIR_IMAGES),
     logsDir: join(root, SUBDIR_LOGS),
+    trashDir: join(root, SUBDIR_TRASH),
   };
 }
 
 export function ensureDataDirs(paths: DataPaths): void {
-  for (const directory of [paths.root, paths.contentDir, paths.imagesDir, paths.logsDir]) {
+  for (const directory of [paths.root, paths.contentDir, paths.imagesDir, paths.logsDir, paths.trashDir]) {
     mkdirSync(directory, { recursive: true });
   }
 }
@@ -111,6 +115,33 @@ export function removeFileIfExists(filePath: string): void {
     unlinkSync(filePath);
   } catch {
     // 文件不存在或已被删除都属于预期情况，不视为错误
+  }
+}
+
+/**
+ * 搬移文件（暂存与还原用）；源文件不存在或搬移失败时返回 false，不抛异常。
+ *
+ * 优先 `renameSync`：同卷内是原子的，且**保留原 mtime**——这正是「不能按文件时间
+ * 判定暂存是否过期」的原因（见 docs/存储与数据格式规范.md §7.2）。
+ * 跨卷（EXDEV）时退化为「复制 + 删除」。
+ */
+export function moveFileIfExists(from: string, to: string): boolean {
+  if (!existsSync(from)) {
+    return false;
+  }
+  try {
+    mkdirSync(dirname(to), { recursive: true });
+    renameSync(from, to);
+    return true;
+  } catch {
+    // 跨卷或目标被占用：退化为复制后删除
+  }
+  try {
+    copyFileSync(from, to);
+    unlinkSync(from);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -49,13 +49,16 @@ export interface TestStoreHandle {
  * 建立一个带可注入时钟的 store。
  * 起始时间取固定值，确保断言可预期，且不依赖真实时间流逝（不用 setTimeout 等待）。
  */
-export function createTestStore(options: { startTime?: number; dataPaths?: DataPaths } = {}): TestStoreHandle {
+export function createTestStore(
+  options: { startTime?: number; dataPaths?: DataPaths; schedulePurge?: (entryId: string) => void } = {},
+): TestStoreHandle {
   const paths = options.dataPaths ?? createTempDataPaths();
   let currentTime = options.startTime ?? 1_756_000_000_000;
 
   const storeOptions: ClipStoreOptions = {
     paths,
     now: () => currentTime,
+    ...(options.schedulePurge === undefined ? {} : { schedulePurge: options.schedulePurge }),
   };
   const store = new ClipStore(storeOptions);
   store.init();

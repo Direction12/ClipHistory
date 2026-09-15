@@ -10,6 +10,8 @@
  * （见 scripts/run-electron.mjs 与 docs/构建与运行.md §4）。
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createIpcHandlers, invokeSafely, type IpcDeps } from './ipc';
 import { defaultSettings } from './settings';
 import type { ClipEntryDetail, DiagnosticsInfo } from '../shared/types';
@@ -356,6 +358,18 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   const restored = (await call('restoreEntry', { entry: { ...restoredEntry, pinned: true } })) as { id: string };
   check(restored.id === targetId, '撤销删除可恢复条目');
   check(store.stats().entries === stats.entries, '撤销后条目数回到删除前');
+
+  // ---- 撤销必须把**文件**也带回来（Phase 6 修复的回归断言）----
+  //
+  // 旧实现只把索引行写回，图片文件在删除瞬间就被抹掉了：卡片回来了却显示「图片已丢失」。
+  // 这里既看界面用的可用性标记，也直接确认文件真的回到 images/ —— 只看条目数会漏掉该缺陷。
+  const restoredImageFile = detail?.image?.file.replace(/^images[\\/]/, '') ?? '';
+  const restoredMeta = store.list({ kind: 'image' }).find((meta) => meta.id === targetId) ?? null;
+  check(restoredMeta?.imageAvailable === true, '撤销后图片文件仍在（界面不会显示「图片已丢失」）');
+  check(
+    restoredImageFile !== '' && existsSync(join(store.dataPaths.imagesDir, restoredImageFile)),
+    `撤销后 PNG 回到 images/（file=${restoredImageFile}）`,
+  );
 
   // ---- 设置读写 ----
   const updated = (await call('updateSettings', {

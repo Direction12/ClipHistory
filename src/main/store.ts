@@ -15,10 +15,10 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { INDEX_COMPACT_THRESHOLD, MAX_ENTRIES } from '../shared/constants';
+import { INDEX_COMPACT_THRESHOLD, MAX_ENTRIES, TRASH_TTL_MS } from '../shared/constants';
 import type { ClipEntryDetail, ClipEntryMeta, EntryFilter, ImageMeta } from '../shared/types';
 import { buildPreview, containsQuery, hashImage, hashText, normalizeText, shouldIgnoreText, truncateText } from './content';
-import { ensureDataDirs, isSafeRelativePath, readTextIfExists, removeFileIfExists, resolveDataPaths, writeFileAtomic, type DataPaths } from './paths';
+import { ensureDataDirs, isSafeRelativePath, moveFileIfExists, readTextIfExists, removeFileIfExists, resolveDataPaths, writeFileAtomic, type DataPaths } from './paths';
 
 /** 索引行的原始形态：合法字段之外一律忽略 */
 interface IndexRow {
@@ -117,6 +117,17 @@ export interface ClipStoreOptions {
   readonly paths?: DataPaths;
   /** 可注入时钟，便于测试去重窗口与过期判定 */
   readonly now?: () => number;
+  /**
+   * 安排一次「暂存区过期清理」。默认用 unref 的 setTimeout 自己定闹钟，
+   * 测试可注入假实现以便断言「删除后确实排了清理」。
+   */
+  readonly schedulePurge?: (entryId: string) => void;
+}
+
+/** 一条待撤销记录：暂存了哪些文件、什么时候可以抹掉 */
+interface PendingTrashRecord {
+  expiresAt: number;
+  readonly files: string[];
 }
 
 export class ClipStore {
@@ -138,9 +149,29 @@ export class ClipStore {
    */
   private dedupWindowMsProvider: () => number = () => 5000;
 
+  /**
+   * 待撤销的暂存登记：条目 id → 暂存了哪些文件、何时可抹。
+   *
+   * **只在内存里**：进程一重启就没有「待撤销会话」了，因此 `init()` 会清空整个
+   * 暂存目录（见 docs/存储与数据格式规范.md §7.2）。
+   */
+  private pendingTrash = new Map<string, PendingTrashRecord>();
+
+  private readonly schedulePurge: (entryId: string) => void;
+
   constructor(options: ClipStoreOptions = {}) {
     this.paths = options.paths ?? resolveDataPaths();
     this.now = options.now ?? (() => Date.now());
+    this.schedulePurge =
+      options.schedulePurge ??
+      (() => {
+        const timer = setTimeout(() => {
+          this.purgeExpiredTrash();
+        }, TRASH_TTL_MS + 1000);
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      });
   }
 
   get dataPaths(): DataPaths {
@@ -162,6 +193,8 @@ export class ClipStore {
    */
   init(): void {
     ensureDataDirs(this.paths);
+    // 启动即清空暂存区：新进程不存在待撤销会话，上一个进程崩溃/退出留下的文件必须抹掉
+    this.purgeTrash();
     this.reloadFromDisk();
   }
 
@@ -504,30 +537,167 @@ export class ClipStore {
     return updated;
   }
 
+  /**
+   * 删除条目：文件**搬进暂存区**而不是当场抹掉，撤销窗口内可原样找回。
+   *
+   * 诚实说明：这叫「延迟删除」，不是「软删除标记」——索引里该条已经消失，
+   * 只是原始文件还在 `trash/` 里等撤销窗口过去（见 docs/存储与数据格式规范.md §7.2）。
+   */
   remove(id: string): boolean {
     const meta = this.entries.get(id);
     if (meta === undefined) {
       return false;
     }
 
+    // 先把文件搬到暂存区：搬移失败只意味着「内容已丢失」，不影响索引一致性
+    const files = this.moveFilesToTrash(meta);
+
     // 用墓碑行标记删除（不追加特殊行，直接从索引移除需重写；这里直接压缩最干净）
     this.entries.delete(id);
-    removeFileIfExists(join(this.paths.contentDir, `${id}.txt`));
     this.compact();
     this.collectOrphanImages();
+
+    if (files.length > 0) {
+      this.pendingTrash.set(id, { expiresAt: this.now() + TRASH_TTL_MS, files });
+      this.schedulePurge(id);
+    }
     return true;
   }
 
-  /** 撤销删除：把条目及其文本全文写回 */
-  restore(detail: ClipEntryDetail): ClipEntryMeta {
-    if (detail.kind === 'text' && detail.text !== undefined) {
-      ensureDataDirs(this.paths);
-      writeFileSync(join(this.paths.contentDir, `${detail.id}.txt`), detail.text, 'utf8');
+  /**
+   * 把条目占用的文件搬进暂存区，返回暂存的文件名清单。
+   *
+   * 两种必须留心的情形：
+   * 1. 内容本来就已丢失 → 返回空数组，删除照常完成（不留待撤销的假象）；
+   * 2. 图片按内容哈希命名，**可能被多个条目共用**——只要还有别的条目引用它，
+   *    就绝不能搬走，否则删掉一条会把另一条的图也弄丢。
+   */
+  private moveFilesToTrash(meta: ClipEntryMeta): string[] {
+    const moved: string[] = [];
+
+    if (meta.kind === 'text') {
+      const fileName = `${meta.id}.txt`;
+      if (moveFileIfExists(join(this.paths.contentDir, fileName), join(this.paths.trashDir, fileName))) {
+        moved.push(fileName);
+      }
+      return moved;
     }
+
+    const imageName = this.imageFileName(meta);
+    if (imageName === null || this.isImageReferencedByOthers(imageName, meta.id)) {
+      return moved;
+    }
+    if (moveFileIfExists(join(this.paths.imagesDir, imageName), join(this.paths.trashDir, imageName))) {
+      moved.push(imageName);
+    }
+    return moved;
+  }
+
+  /** 取图片条目的文件名（不含目录）；元数据缺失或路径不安全时返回 null */
+  private imageFileName(meta: ClipEntryMeta): string | null {
+    const relative = meta.image?.file;
+    if (relative === undefined || !isSafeRelativePath(relative)) {
+      return null;
+    }
+    const name = relative.split(/[\\/]/).pop() ?? '';
+    return name === '' ? null : name;
+  }
+
+  /** 除 exceptId 之外是否还有条目引用同一张图片文件 */
+  private isImageReferencedByOthers(fileName: string, exceptId: string): boolean {
+    for (const [id, meta] of this.entries) {
+      if (id === exceptId) {
+        continue;
+      }
+      if (this.imageFileName(meta) === fileName) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 撤销删除：先尽量从暂存区搬回原始文件（保字节），再补写全文，最后把索引行加回去。
+   *
+   * 三种情形都要能正确落地：
+   * - 暂存文件还在 → 原样搬回，图片缩略图立即恢复；
+   * - 已过撤销窗口（文件已抹）→ 文字按传入全文重建，图片保持「已丢失」并由界面明示；
+   * - 图片是与别的条目共用的同一张 → 文件从未被搬走，无需还原。
+   */
+  restore(detail: ClipEntryDetail): ClipEntryMeta {
+    ensureDataDirs(this.paths);
+    this.restoreFilesFromTrash(detail);
+
+    if (detail.kind === 'text' && detail.text !== undefined) {
+      const target = join(this.paths.contentDir, `${detail.id}.txt`);
+      if (!existsSync(target)) {
+        writeFileSync(target, detail.text, 'utf8');
+      }
+    }
+
+    this.pendingTrash.delete(detail.id);
+
     const meta: ClipEntryMeta = { ...detail };
     delete (meta as { text?: string }).text;
     this.appendRow(meta);
     return meta;
+  }
+
+  /** 从暂存区把条目文件搬回原位；文件不在暂存区时安静返回 */
+  private restoreFilesFromTrash(detail: ClipEntryDetail): void {
+    if (detail.kind === 'text') {
+      const fileName = `${detail.id}.txt`;
+      moveFileIfExists(join(this.paths.trashDir, fileName), join(this.paths.contentDir, fileName));
+      return;
+    }
+    const imageName = this.imageFileName(detail);
+    if (imageName !== null) {
+      moveFileIfExists(join(this.paths.trashDir, imageName), join(this.paths.imagesDir, imageName));
+    }
+  }
+
+  /**
+   * 清空暂存区（启动时调用），返回抹掉的文件数。
+   *
+   * 进程重启后不存在「待撤销会话」，所以这里不做任何时间判断，一律清空。
+   */
+  purgeTrash(): number {
+    this.pendingTrash.clear();
+    if (!existsSync(this.paths.trashDir)) {
+      return 0;
+    }
+    let removed = 0;
+    for (const name of readdirSync(this.paths.trashDir)) {
+      removeFileIfExists(join(this.paths.trashDir, name));
+      removed += 1;
+    }
+    return removed;
+  }
+
+  /**
+   * 抹掉已过撤销窗口的暂存文件，返回抹掉的文件数。
+   *
+   * 判定只看内存登记的 `expiresAt`，**绝不看文件时间**：`rename` 会保留原 mtime，
+   * 一张几天前复制的图刚搬进暂存区就会被误判成过期而当场抹掉。
+   */
+  purgeExpiredTrash(now: number = this.now()): number {
+    let removed = 0;
+    for (const [entryId, record] of Array.from(this.pendingTrash)) {
+      if (record.expiresAt > now) {
+        continue;
+      }
+      for (const name of record.files) {
+        removeFileIfExists(join(this.paths.trashDir, name));
+        removed += 1;
+      }
+      this.pendingTrash.delete(entryId);
+    }
+    return removed;
+  }
+
+  /** 暂存区里待撤销的条目数（诊断与测试用） */
+  get pendingTrashCount(): number {
+    return this.pendingTrash.size;
   }
 
   /** 清空：保留置顶条目，返回被移除的数量 */
@@ -570,6 +740,9 @@ export class ClipStore {
    *
    * 为什么先压缩：压缩后的索引才是「当前有效引用」的准确依据，
    * 否则可能依据含冗余旧行的索引误判（见 docs/存储与数据格式规范.md §7 安全要求）。
+   *
+   * 只扫 `images/`，因此不会碰到暂存区 `trash/`：待撤销的文件不在「有效引用」的
+   * 判定范围内，但仍必须活到撤销窗口结束（见 §7.2）。
    */
   collectOrphanImages(): string[] {
     if (!existsSync(this.paths.imagesDir)) {

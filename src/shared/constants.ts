@@ -46,6 +46,14 @@ export const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** 删除后可撤销的时间窗口（ms），见 docs/设计规范.md §7 */
 export const UNDO_WINDOW_MS = 5000;
 
+/**
+ * 撤销暂存区（`trash/`）的保留时长（ms），见 docs/存储与数据格式规范.md §7.2。
+ *
+ * 取撤销窗口的两倍：界面稍慢或用户手慢时仍来得及撤销，同时保证文件不会长期滞留占盘。
+ * 渲染层的倒计时固定为 `UNDO_WINDOW_MS`（提示条 5 秒后消失），服务端多留一倍余量。
+ */
+export const TRASH_TTL_MS = UNDO_WINDOW_MS * 2;
+
 /** 默认窗口尺寸，见 docs/设计规范.md §4 */
 export const DEFAULT_WINDOW_BOUNDS = {
   x: undefined as number | undefined,

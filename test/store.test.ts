@@ -230,7 +230,7 @@ describe('store 文本读写与忽略规则（T-04 / T-07）', () => {
 });
 
 describe('store 删除 / 撤销 / 清空（T-04）', () => {
-  test('删除会同时移除全文文件', () => {
+  test('删除会把全文文件移出 content/（撤销窗口内暂存在 trash/）', () => {
     const { store, paths } = trackedStore();
     const result = store.addText('待删除');
     const id = result.entry!.id;
@@ -240,7 +240,8 @@ describe('store 删除 / 撤销 / 清空（T-04）', () => {
     assert.equal(store.remove(id), true);
 
     assert.equal(store.get(id), null);
-    assert.equal(existsSync(contentFile), false, '删除条目应连带删除全文文件');
+    assert.equal(existsSync(contentFile), false, '删除条目应连带移除全文文件');
+    assert.ok(existsSync(join(paths.trashDir, `${id}.txt`)), '文件先进暂存区，等撤销窗口结束（详见 trash.test.ts）');
   });
 
   test('撤销删除可把条目与全文一并恢复', () => {
@@ -306,7 +307,7 @@ describe('store 图片（T-04）', () => {
     assert.equal(pngFiles.length, 1, '相同图片内容只应占用一个文件');
   });
 
-  test('删除图片条目后孤儿图片被回收', () => {
+  test('删除图片条目后图片离开 images/，不再被索引引用', () => {
     const { store, paths } = trackedStore();
     const result = store.addImage(TINY_PNG, 1, 1);
     const absolute = join(paths.root, result.entry!.image!.file);
@@ -314,7 +315,8 @@ describe('store 图片（T-04）', () => {
 
     store.remove(result.entry!.id);
 
-    assert.equal(existsSync(absolute), false, '不再被引用的图片应被回收');
+    assert.equal(existsSync(absolute), false, '图片应离开 images/');
+    assert.deepEqual(store.collectOrphanImages(), [], '暂存文件不是孤儿，回收不得碰它');
   });
 });
 

@@ -9,6 +9,8 @@
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createIpcHandlers, invokeSafely, validateSettingsSeed, type IpcDeps } from '../src/main/ipc';
 import { defaultSettings } from '../src/main/settings';
 import type { ClipEntryDetail, ClipEntryMeta, Settings } from '../src/shared/types';
@@ -180,6 +182,26 @@ describe('IPC 条目操作', () => {
     const restored = (await h.call('restoreEntry', { entry: detail })) as ClipEntryMeta;
     assert.equal(restored.id, id);
     assert.equal(h.deps.getStore()!.getDetail(id)?.text, '待删除内容', '全文必须一并恢复');
+  });
+
+  test('删除走暂存区：图片文件进 trash/，撤销后原样回到 images/（原缺陷的 IPC 级回归）', async () => {
+    const h = createHarness();
+    const store = h.deps.getStore()!;
+    const entry = store.addImage(TINY_PNG, 1, 1).entry!;
+    const pngName = `${entry.hash}.png`;
+    const pngPath = join(store.dataPaths.imagesDir, pngName);
+    const detail = (await h.call('getEntry', { id: entry.id })) as ClipEntryDetail;
+
+    assert.equal(await h.call('deleteEntry', { id: entry.id }), true);
+    assert.equal(existsSync(pngPath), false, '删除后图片应离开 images/');
+    assert.ok(existsSync(join(store.dataPaths.trashDir, pngName)), '图片应进入暂存区');
+    assert.equal(store.pendingTrashCount, 1);
+
+    await h.call('restoreEntry', { entry: detail });
+    assert.ok(existsSync(pngPath), '撤销后图片必须真的回来');
+    assert.equal(store.pendingTrashCount, 0);
+    const restored = (store.list().find((meta) => meta.id === entry.id) ?? null) as ClipEntryMeta | null;
+    assert.notEqual(restored?.imageAvailable, false, '界面不应再显示「图片已丢失」');
   });
 
   test('撤销删除的入参缺少必需字段时被拒绝（该数据会直接写回索引）', async () => {
