@@ -65,6 +65,18 @@
   box-sizing: border-box;
 }
 
+/**
+ * 必须显式尊重 [hidden]。
+ *
+ * 原因：`hidden` 属性靠浏览器 UA 样式表的 `display: none` 生效，而 UA 样式优先级最低 ——
+ * 只要作者样式给元素写了 `display`（例如 `.modal { display: flex }`），就会把它压掉，
+ * 于是 `element.hidden = true` 状态正确但**视觉上毫无变化**。
+ * 本项目真实踩过：二次确认弹窗与设置面板都无法关闭。
+ */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;

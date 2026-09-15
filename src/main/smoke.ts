@@ -175,6 +175,79 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     '设置面板与二次确认弹层的元素齐备（清空按钮可点）',
   );
 
+  // ---- 第 0.6 步：弹层/面板的「隐藏」是否真的生效 ----
+  //
+  // 为什么必须用 getComputedStyle 而不是读 hidden 属性：`hidden` 属性靠 UA 样式表的
+  // `display:none` 生效，一旦作者样式给元素写了 display（例如 `.modal{display:flex}`），
+  // 属性为 true 但元素**依然可见** —— 本项目真实踩过（确认弹窗关不掉）。
+  // 因此这里断言的是「计算后是否真的不渲染」。
+  const layerState = (await evaluateInRenderer(`
+    (() => {
+      const dialog = document.getElementById('confirm-dialog');
+      const panel = document.getElementById('settings-panel');
+      const isHiddenVisually = (node) => {
+        if (node === null) return 'missing';
+        const style = window.getComputedStyle(node);
+        const hiddenAttr = node.hasAttribute('hidden');
+        if (style.display === 'none') return 'hidden';
+        return hiddenAttr ? 'attr-hidden-but-visible' : 'visible';
+      };
+      return {
+        dialogInitially: isHiddenVisually(dialog),
+        panelInitially: isHiddenVisually(panel),
+        dialogDisplay: dialog === null ? '(none)' : window.getComputedStyle(dialog).display,
+        panelDisplay: panel === null ? '(none)' : window.getComputedStyle(panel).display,
+      };
+    })()
+  `)) as
+    | { dialogInitially: string; panelInitially: string; dialogDisplay: string; panelDisplay: string }
+    | undefined;
+
+  check(
+    layerState?.dialogInitially === 'hidden',
+    `二次确认弹层初始不可见（计算 display=${String(layerState?.dialogDisplay)}）`,
+  );
+  check(
+    layerState?.panelInitially === 'hidden',
+    `设置面板初始不可见（计算 display=${String(layerState?.panelDisplay)}）`,
+  );
+
+  // 打开设置面板 → 关闭 → 确认真的不可见（覆盖「设置面板关不掉」这类回归）
+  const panelToggle = (await evaluateInRenderer(`
+    (async () => {
+      const panel = document.getElementById('settings-panel');
+      const open = document.getElementById('settings-button');
+      const close = document.getElementById('settings-close');
+      const displayOf = () => window.getComputedStyle(panel).display;
+      open.click();
+      const afterOpen = displayOf();
+      close.click();
+      const afterClose = displayOf();
+      return { afterOpen, afterClose };
+    })()
+  `)) as { afterOpen: string; afterClose: string } | undefined;
+  check(
+    panelToggle?.afterOpen !== 'none' && panelToggle?.afterClose === 'none',
+    `设置面板可开可关（开=${String(panelToggle?.afterOpen)}，关=${String(panelToggle?.afterClose)}）`,
+  );
+
+  // 打开二次确认 → 点「取消」→ 确认真的不可见
+  const dialogToggle = (await evaluateInRenderer(`
+    (() => {
+      const dialog = document.getElementById('confirm-dialog');
+      const displayOf = () => window.getComputedStyle(dialog).display;
+      document.getElementById('clear-button').click();
+      const afterOpen = displayOf();
+      document.getElementById('confirm-cancel').click();
+      const afterCancel = displayOf();
+      return { afterOpen, afterCancel };
+    })()
+  `)) as { afterOpen: string; afterCancel: string } | undefined;
+  check(
+    dialogToggle?.afterOpen !== 'none' && dialogToggle?.afterCancel === 'none',
+    `清空确认弹层可开可取消（开=${String(dialogToggle?.afterOpen)}，取消后=${String(dialogToggle?.afterCancel)}）`,
+  );
+
   const handlers = createIpcHandlers(deps);
   type HandlerName = keyof typeof handlers;
 

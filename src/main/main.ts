@@ -506,10 +506,15 @@ function runSmokeTestIfRequested(): void {
 
 // ---------- 启动 ----------
 
-// 单实例锁：第二次启动时唤起已有实例，不重复常驻（见 docs/需求规格说明书.md FR-14）
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
+// 单实例锁：第二次启动时唤起已有实例，不重复常驻（见 docs/需求规格说明书.md FR-14）。
+//
+// 为什么自检模式跳过它：自检会反复运行，一旦上一次自检留下残留进程占着锁，
+// 本次启动就会**立刻退出且不打印任何日志**（退出码还是 0），极难排查 —— 本项目真实踩过。
+// 自检本就运行在独立的临时数据目录，跳过锁是安全的。
+const gotSingleInstanceLock = isSmokeTest() ? true : app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
+  console.error('已有实例在运行，本次启动退出（如需强制启动，请先结束残留进程）');
   app.quit();
 } else {
   app.on('second-instance', () => {
