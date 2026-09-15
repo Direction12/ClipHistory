@@ -42,6 +42,25 @@ let trayHandle: TrayHandle | null = null;
 /** 记录采集过程中的异常，供诊断接口暴露 */
 let lastWatcherError: string | null = null;
 
+/**
+ * 进程级兜底日志。
+ *
+ * 为什么必须放在 app ready 之前：如果初始化阶段就抛异常（例如模块加载失败），
+ * 进程会静默退出、什么都不打印 —— 排查时完全看不出发生过什么。
+ * 这三个钩子保证「任何未捕获的失败」至少留下一条线索。
+ */
+process.on('uncaughtException', (error) => {
+  console.error(`[致命] 未捕获异常：${error.stack ?? error.message}`);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error(`[致命] 未处理的 Promise 拒绝：${String(reason)}`);
+});
+process.on('exit', (code) => {
+  if (isSmokeTest()) {
+    console.error(`[自检] 进程退出，退出码 ${String(code)}`);
+  }
+});
+
 /** 阻止「关窗即退出」，改由托盘菜单退出 */
 let isQuitting = false;
 
@@ -407,7 +426,14 @@ function initializeTray(): void {
  * 自检会写入数据，故运行时由 scripts/run-electron.mjs 把数据目录指向临时目录。
  */
 function runSmokeTestIfRequested(): void {
-  if (!isSmokeTest() || mainWindow === null) {
+  if (!isSmokeTest()) {
+    return;
+  }
+  console.log('[自检] 已请求冒烟自检');
+
+  if (mainWindow === null) {
+    console.error('冒烟自检失败：主窗口未创建');
+    app.exit(1);
     return;
   }
 
@@ -417,7 +443,18 @@ function runSmokeTestIfRequested(): void {
     app.exit(1);
   }, SMOKE_TEST_TIMEOUT_MS);
 
+  console.log(`[自检] 等待渲染层加载：${window.webContents.getURL() || '(尚未开始加载)'}`);
+
+  window.webContents.on('did-finish-load', () => {
+    console.log('[自检] 渲染层加载完成事件已触发');
+  });
+
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[自检] 渲染层加载失败：${String(errorCode)} ${errorDescription}（${validatedURL}）`);
+  });
+
   window.webContents.once('did-finish-load', () => {
+    console.log('[自检] 开始执行自检流程');
     void (async () => {
       try {
         const pingResult = (await window.webContents.executeJavaScript(
@@ -440,6 +477,8 @@ function runSmokeTestIfRequested(): void {
           log: (line: string) => {
             console.log(line);
           },
+          evaluateInRenderer: (expression: string) =>
+            window.webContents.executeJavaScript(expression) as Promise<unknown>,
         });
 
         console.log('');
@@ -456,18 +495,12 @@ function runSmokeTestIfRequested(): void {
         console.log(`健康状态：${buildHealthString()}`);
         app.exit(0);
       } catch (error) {
-        console.error(`冒烟自检失败：${error instanceof Error ? error.message : String(error)}`);
+        console.error(`冒烟自检失败：${error instanceof Error ? error.stack : String(error)}`);
         app.exit(1);
       } finally {
         clearTimeout(timeout);
       }
     })();
-  });
-
-  window.webContents.once('did-fail-load', (_event, errorCode, errorDescription) => {
-    clearTimeout(timeout);
-    console.error(`冒烟自检失败：渲染层加载失败（${errorCode} ${errorDescription}）`);
-    app.exit(1);
   });
 }
 

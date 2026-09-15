@@ -9,13 +9,31 @@
  * - 文本一律用 textContent 写入，绝不拼接 innerHTML —— 剪贴板内容是不可信输入。
  */
 
-import { RENDERER_API_KEY } from '../shared/constants';
+// ---------------------------------------------------------------------------
+// 关于本文件为何**不 import 任何模块**（包括 src/shared/constants.ts）：
+//
+// 渲染层以原生 ESM 直接被浏览器加载，而浏览器的模块解析要求**显式扩展名**且
+// **不做目录解析**；tsc 又不会给无扩展名的导入补 `.js`。更麻烦的是相对路径：
+// 源码里 `../shared/constants` 是按 `src/renderer/` 算的，编译产物在
+// `dist/renderer/renderer/`，同一路径会指向不存在的位置。
+//
+// 后果是整条模块链加载失败、模块**静默不执行**，界面卡在 HTML 里的初始文字
+// 「正在加载…」。这个坑实际发生过（见 devlog/sessions/2026-09-15-phase4-* 与
+// 后续修复记录），因此这里刻意让渲染层自包含。
+//
+// 代价：`RENDERER_API_KEY` 的字面量在本文件与 src/shared/constants.ts 各出现一次。
+// 为防两者漂移，集成自检（src/main/smoke.ts）会断言 `window.clipHistory` 确实存在，
+// 且断言界面真的完成初始化 —— 一旦挂载名对不上，自检会直接失败。
+// ---------------------------------------------------------------------------
+
+/** 与 src/shared/constants.ts 的 RENDERER_API_KEY 保持一致（由集成自检兜底） */
+const RENDERER_API_KEY_LITERAL = 'clipHistory';
 
 type ClipFilter = 'all' | 'text' | 'image';
 
-/** 通过共享常量取 API（避免把挂载名写死在两处） */
+/** 取 preload 注入的 API；名字对不上会拿到 undefined，由自检兜底发现 */
 function api(): ClipHistoryBridge {
-  return (window as unknown as Record<string, ClipHistoryBridge>)[RENDERER_API_KEY];
+  return (window as unknown as Record<string, ClipHistoryBridge>)[RENDERER_API_KEY_LITERAL];
 }
 
 // ---------- 界面状态 ----------
@@ -587,10 +605,15 @@ async function bootstrap(): Promise<void> {
   await reloadSettings();
   await reload();
 
+  // 状态栏最后显示健康串（存储/采集/清理/托盘），它是排查问题时最有用的信息。
+  // 界面「已完成初始化」的判定不靠这句文字，而是靠 body 上的就绪标记，
+  // 以免文案改动就让自动化验收误判（见 src/main/smoke.ts）。
   const health = unwrap(await api().ping(), '自检');
   if (health !== null) {
     setStatus(health.message, 'ok');
   }
+
+  document.body.dataset.bootState = 'ready';
 }
 
 void bootstrap();

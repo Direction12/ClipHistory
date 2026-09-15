@@ -28,6 +28,14 @@ export interface SmokeContext {
   readonly deps: IpcDeps;
   /** 输出一行结果 */
   readonly log: (line: string) => void;
+  /**
+   * 在**渲染层**里求值一段脚本（真实走 preload → IPC 通路）。
+   *
+   * 为什么必须有这一步：主进程直接调处理器只能验证「处理器本身」，
+   * 验证不了渲染层能不能真的调到它们 —— 而后者恰恰是最容易出错的地方
+   * （preload 未注入、常量未内联、属性名不匹配等都会在这里暴露）。
+   */
+  readonly evaluateInRenderer: (expression: string) => Promise<unknown>;
 }
 
 export interface SmokeResult {
@@ -42,7 +50,7 @@ const SMOKE_TEXT = '集成自检文本 Alpha 42';
  * 执行集成自检。返回通过/失败项，由调用方决定退出码。
  */
 export async function runIntegrationSmokeTest(context: SmokeContext): Promise<SmokeResult> {
-  const { store, watcher, deps, log } = context;
+  const { store, watcher, deps, log, evaluateInRenderer } = context;
   const failures: string[] = [];
   let passed = 0;
 
@@ -54,6 +62,118 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
       failures.push(label);
     }
   };
+
+  // ---- 第 0 步：渲染层能否真的调到 IPC（最容易出错、也最该先验的地方）----
+  const rendererProbe = (await evaluateInRenderer(`
+    (() => {
+      try {
+        if (typeof window.clipHistory !== 'object' || window.clipHistory === null) {
+          return { stage: 'bridge-missing', detail: 'window.clipHistory 不存在' };
+        }
+        const names = ['ping','diagnostics','listEntries','getEntry','setPinned','deleteEntry','restoreEntry','clearEntries','copyEntry','pasteEntry','getSettings','updateSettings','onEntriesChanged','onWatcherState'];
+        const missing = names.filter((name) => typeof window.clipHistory[name] !== 'function');
+        if (missing.length > 0) {
+          return { stage: 'api-incomplete', detail: '缺少方法：' + missing.join(',') };
+        }
+        return { stage: 'ok', detail: '' };
+      } catch (error) {
+        return { stage: 'threw', detail: String(error && error.message ? error.message : error) };
+      }
+    })()
+  `)) as { stage: string; detail: string } | undefined;
+
+  if (rendererProbe === undefined) {
+    check(false, '渲染层自检脚本应返回结果');
+  } else if (rendererProbe.stage !== 'ok') {
+    check(false, `渲染层可访问 preload API（阶段=${rendererProbe.stage}：${rendererProbe.detail}）`);
+  } else {
+    check(true, '渲染层可访问 preload API（14 个方法齐备）');
+  }
+
+  // 真实走一次 IPC：渲染层调用 listEntries
+  const rendererListResult = (await evaluateInRenderer(
+    'window.clipHistory.listEntries({})',
+  )) as { ok?: boolean; error?: string; data?: unknown } | undefined;
+  check(
+    rendererListResult?.ok === true && Array.isArray(rendererListResult.data),
+    `渲染层经 IPC 取列表成功${rendererListResult?.ok === true ? '' : `（错误：${String(rendererListResult?.error)}）`}`,
+  );
+
+  const rendererSettingsResult = (await evaluateInRenderer(
+    'window.clipHistory.getSettings()',
+  )) as { ok?: boolean; data?: { retentionDays?: number }; error?: string } | undefined;
+  check(
+    rendererSettingsResult?.ok === true && typeof rendererSettingsResult.data?.retentionDays === 'number',
+    `渲染层经 IPC 读设置成功${rendererSettingsResult?.ok === true ? '' : `（错误：${String(rendererSettingsResult?.error)}）`}`,
+  );
+
+  const rendererDiagnostics = (await evaluateInRenderer(
+    'window.clipHistory.diagnostics()',
+  )) as { ok?: boolean; data?: { dataRoot?: string }; error?: string } | undefined;
+  check(
+    rendererDiagnostics?.ok === true && (rendererDiagnostics.data?.dataRoot ?? '').length > 0,
+    `渲染层经 IPC 读诊断成功${rendererDiagnostics?.ok === true ? '' : `（错误：${String(rendererDiagnostics?.error)}）`}`,
+  );
+
+  // ---- 第 0.5 步：等界面完成初始化，再断言它真的装配好了 ----
+  //
+  // 为什么要「等」：`did-finish-load` 只表示文档与模块加载完成，而渲染层的 bootstrap
+  // 还要 await 两次 IPC（读设置、取列表）才会把状态栏改成「已就绪」。
+  // 如果在这里立刻断言，就会在界面仍显示「正在加载…」时误判为失败。
+  // 这一步同时能抓住真实问题：模块静默不执行、或装配过程中抛异常 → 状态栏永远不会变。
+  const readUiState = `
+    (() => {
+      const status = document.getElementById('status-text');
+      const list = document.getElementById('list');
+      return {
+        bootState: document.body.dataset.bootState || '(未设置)',
+        statusText: status === null ? '(缺少状态栏元素)' : status.textContent,
+        listChildCount: list === null ? -1 : list.children.length,
+        settingsPanelExists: document.getElementById('settings-panel') !== null,
+        confirmDialogExists: document.getElementById('confirm-dialog') !== null,
+        confirmOkExists: document.getElementById('confirm-ok') !== null,
+      };
+    })()
+  `;
+
+  interface UiState {
+    bootState: string;
+    statusText: string;
+    listChildCount: number;
+    settingsPanelExists: boolean;
+    confirmDialogExists: boolean;
+    confirmOkExists: boolean;
+  }
+
+  let uiState: UiState | undefined;
+  const uiDeadline = Date.now() + 10_000;
+  while (Date.now() < uiDeadline) {
+    uiState = (await evaluateInRenderer(readUiState)) as UiState | undefined;
+    // 以 body 上的就绪标记为准，而不是文案 —— 文案改动不应让验收误判
+    if (uiState !== undefined && uiState.bootState === 'ready') {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  check(
+    uiState?.bootState === 'ready',
+    `界面初始化完成（bootState=${String(uiState?.bootState)}，状态栏="${String(uiState?.statusText)}"）`,
+  );
+  check(
+    uiState !== undefined && !uiState.statusText.includes('正在加载'),
+    '状态栏已脱离「正在加载」状态',
+  );
+  check(
+    uiState?.listChildCount !== undefined && uiState.listChildCount > 0,
+    `列表区已渲染内容（子节点 ${String(uiState?.listChildCount)}）`,
+  );
+  check(
+    uiState?.settingsPanelExists === true &&
+      uiState.confirmDialogExists === true &&
+      uiState.confirmOkExists === true,
+    '设置面板与二次确认弹层的元素齐备（清空按钮可点）',
+  );
 
   const handlers = createIpcHandlers(deps);
   type HandlerName = keyof typeof handlers;
