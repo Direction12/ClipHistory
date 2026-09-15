@@ -356,15 +356,20 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   check(store.stats().entries === stats.entries, '撤销后条目数回到删除前');
 
   // ---- 设置读写 ----
-  const updated = (await call('updateSettings', { retentionDays: 5, pasteMode: 'copyOnly' })) as {
-    retentionDays: number;
-    pasteMode: string;
-  };
+  const updated = (await call('updateSettings', {
+    retentionDays: 5,
+    alwaysOnTop: true,
+    opacity: 0.8,
+  })) as { retentionDays: number; alwaysOnTop: boolean; opacity: number };
   check(updated.retentionDays === 5, '设置更新生效（retentionDays=5）');
-  check(updated.pasteMode === 'copyOnly', '设置更新生效（pasteMode=copyOnly）');
+  check(updated.alwaysOnTop, '设置更新生效（alwaysOnTop=true）');
+  check(Math.abs(updated.opacity - 0.8) < 1e-6, '设置更新生效（opacity=0.8）');
 
-  const readBack = (await call('getSettings')) as { retentionDays: number; pasteMode: string };
-  check(readBack.retentionDays === 5 && readBack.pasteMode === 'copyOnly', '设置可回读（已落盘）');
+  const readBack = (await call('getSettings')) as { retentionDays: number; alwaysOnTop: boolean; opacity: number };
+  check(
+    readBack.retentionDays === 5 && readBack.alwaysOnTop === true && Math.abs(readBack.opacity - 0.8) < 1e-6,
+    `设置可回读（已落盘）——实际 ${JSON.stringify(readBack)}`,
+  );
 
   // 期限越界应被回退为默认值，而不是拒绝整次更新
   const coerced = (await call('updateSettings', { retentionDays: 9999 })) as { retentionDays: number };
@@ -376,6 +381,8 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   // ---- 非法入参必须被拒绝（契约纪律 1）----
   const checks: Array<[HandlerName, unknown, string]> = [
     ['updateSettings', { retentionDays: '五天' }, '非法 retentionDays 被拒绝'],
+    ['updateSettings', { alwaysOnTop: '是' }, '非布尔 alwaysOnTop 被拒绝'],
+    ['updateSettings', { opacity: '半透明' }, '非数字 opacity 被拒绝'],
     ['listEntries', { kind: 'video' }, '非法 kind 被拒绝'],
     ['clearEntries', { keepPinned: false }, '清空时 keepPinned=false 被拒绝'],
     ['getEntry', {}, '缺失 id 被拒绝'],
@@ -413,52 +420,39 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
     check(result.ok, `能把焦点切回上一个窗口（${result.detail}）`);
   }
 
-  // ---- 粘贴模式驱动主按钮文案（FR-13）----
-  // 放在最后：它会改设置，前面的断言依赖 retentionDays/pasteMode 的已知状态。
-  //
-  // 注意：渲染层的刷新是异步的（设置变更 → 重读设置 → 就地刷新按钮），
-  // 因此必须**轮询等待界面反映变更**，不能设完就立刻读 —— 那读到的是旧状态。
-  const readPrimaryLabel = `
+  // ---- 卡片固定提供「粘贴」与「复制」两个按钮（需求 CH-01：不再有粘贴模式设置）----
+  const buttonLabels = (await evaluateInRenderer(
+    "Array.from(document.querySelectorAll('.card__actions button')).map((b) => b.textContent)",
+  )) as string[] | undefined;
+  check(
+    Array.isArray(buttonLabels) &&
+      buttonLabels.includes('粘贴') &&
+      buttonLabels.includes('复制'),
+    `卡片同时提供「粘贴」与「复制」按钮（实际：${JSON.stringify(buttonLabels)}）`,
+  );
+
+  // ---- 置顶与透明度：设置能生效且界面控件状态正确 ----
+  const windowControls = (await evaluateInRenderer(`
     (() => {
-      const button = document.querySelector('.card__action--primary');
-      return button === null ? '(无主按钮)' : button.textContent;
+      const alwaysOnTop = document.getElementById('always-on-top');
+      const opacity = document.getElementById('opacity-input');
+      return {
+        hasToggle: alwaysOnTop !== null,
+        hasSlider: opacity !== null,
+        toggleChecked: alwaysOnTop === null ? null : alwaysOnTop.checked,
+        sliderValue: opacity === null ? null : opacity.value,
+      };
     })()
-  `;
+  `)) as
+    | { hasToggle: boolean; hasSlider: boolean; toggleChecked: boolean | null; sliderValue: string | null }
+    | undefined;
 
-  interface PrimaryProbe {
-    label: string;
-    mode: string;
-  }
-
-  const waitForPrimaryLabel = async (expected: string): Promise<{ label: string; mode: string }> => {
-    const deadline = Date.now() + 5_000;
-    let label = '(未读取)';
-    let mode = '(未读取)';
-    while (Date.now() < deadline) {
-      label = String(await evaluateInRenderer(readPrimaryLabel));
-      const settings = (await call('getSettings')) as { pasteMode: string };
-      mode = settings.pasteMode;
-      if (label === expected) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 120));
-    }
-    return { label, mode };
-  };
-
-  await call('updateSettings', { pasteMode: 'copyOnly' });
-  const copyOnlyProbe: PrimaryProbe = await waitForPrimaryLabel('复制');
   check(
-    copyOnlyProbe.label === '复制',
-    `pasteMode=copyOnly 时主按钮显示「复制」（实际：${copyOnlyProbe.label}）`,
+    windowControls?.hasToggle === true && windowControls.hasSlider === true,
+    '设置面板提供「窗口置顶」开关与「透明度」滑杆',
   );
-
-  await call('updateSettings', { pasteMode: 'auto' });
-  const autoProbe: PrimaryProbe = await waitForPrimaryLabel('粘贴');
-  check(
-    autoProbe.label === '粘贴',
-    `pasteMode=auto 时主按钮显示「粘贴」（实际：${autoProbe.label}）`,
-  );
+  check(windowControls?.toggleChecked === true, '置顶开关反映了设置值（true）');
+  check(windowControls?.sliderValue === '80', `透明度滑杆反映了设置值（实际 ${String(windowControls?.sliderValue)}）`);
 
   return { passed, failed: failures };
 }

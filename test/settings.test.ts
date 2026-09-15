@@ -16,7 +16,6 @@ import {
   updateSettings,
 } from '../src/main/settings';
 import { DEFAULT_DEDUP_WINDOW_MS, DEFAULT_RETENTION_DAYS } from '../src/shared/constants';
-import type { PasteMode } from '../src/shared/types';
 import { createTempDataPaths, removeTempDataPaths } from './helpers/paths';
 
 const cleanups: Array<() => void> = [];
@@ -44,10 +43,10 @@ describe('设置校验 — 逐字段回退（T-15）', () => {
     for (const invalid of [0, -1, 366, 9999, 1.5, '3', null, undefined, Number.NaN]) {
       const { settings, warnings } = coerceSettings({
         retentionDays: invalid,
-        pasteMode: 'copyOnly',
+        alwaysOnTop: true,
       });
       assert.equal(settings.retentionDays, DEFAULT_RETENTION_DAYS, `输入 ${String(invalid)} 应回退`);
-      assert.equal(settings.pasteMode, 'copyOnly', '其它合法字段必须保留');
+      assert.equal(settings.alwaysOnTop, true, '其它合法字段必须保留');
       assert.ok(warnings.length > 0, '回退必须产生告警，不能静默');
     }
   });
@@ -65,10 +64,18 @@ describe('设置校验 — 逐字段回退（T-15）', () => {
     assert.equal(coerceSettings({ dedupWindowMs: 0 }).settings.dedupWindowMs, 0);
   });
 
-  test('pasteMode 非法枚举回退为 auto', () => {
-    assert.equal(coerceSettings({ pasteMode: 'whatever' }).settings.pasteMode, 'auto');
-    assert.equal(coerceSettings({ pasteMode: 123 }).settings.pasteMode, 'auto');
-    assert.equal(coerceSettings({ pasteMode: 'copyOnly' }).settings.pasteMode, 'copyOnly');
+  test('alwaysOnTop 非布尔回退为 false', () => {
+    assert.equal(coerceSettings({ alwaysOnTop: 'yes' }).settings.alwaysOnTop, false);
+    assert.equal(coerceSettings({ alwaysOnTop: true }).settings.alwaysOnTop, true);
+  });
+
+  test('opacity 越界或非数字回退为默认值', () => {
+    assert.equal(coerceSettings({ opacity: 0.1 }).settings.opacity, 1, '低于下限应回退');
+    assert.equal(coerceSettings({ opacity: 1.5 }).settings.opacity, 1, '高于上限应回退');
+    assert.equal(coerceSettings({ opacity: '半透明' }).settings.opacity, 1);
+    assert.equal(coerceSettings({ opacity: 0.6 }).settings.opacity, 0.6, '合法值应保留');
+    assert.equal(coerceSettings({ opacity: 0.4 }).settings.opacity, 0.4, '边界下限合法');
+    assert.equal(coerceSettings({ opacity: 1 }).settings.opacity, 1, '边界上限合法');
   });
 
   test('paused 非布尔回退为 false', () => {
@@ -115,7 +122,7 @@ describe('设置持久化 — 读写与原子写入（T-16）', () => {
 
   test('写入后可回读，字段一致', () => {
     const paths = tempPaths();
-    const custom = { ...defaultSettings(), retentionDays: 5, pasteMode: 'copyOnly' as const, paused: true };
+    const custom = { ...defaultSettings(), retentionDays: 5, alwaysOnTop: true, opacity: 0.7, paused: true };
 
     saveSettings(custom, paths);
     const { settings, warnings } = loadSettings(paths);
@@ -153,14 +160,14 @@ describe('设置持久化 — 读写与原子写入（T-16）', () => {
     const paths = tempPaths();
     writeFileSync(
       paths.settingsFile,
-      JSON.stringify({ retentionDays: 9999, pasteMode: 'copyOnly', paused: true, windowBounds: { x: 3, y: 4, width: 400, height: 500 } }),
+      JSON.stringify({ retentionDays: 9999, alwaysOnTop: true, paused: true, windowBounds: { x: 3, y: 4, width: 400, height: 500 } }),
       'utf8',
     );
 
     const { settings } = loadSettings(paths);
 
     assert.equal(settings.retentionDays, DEFAULT_RETENTION_DAYS, '非法字段回退');
-    assert.equal(settings.pasteMode, 'copyOnly', '合法字段保留');
+    assert.equal(settings.alwaysOnTop, true, '合法字段保留');
     assert.equal(settings.paused, true);
     assert.deepEqual(settings.windowBounds, { x: 3, y: 4, width: 400, height: 500 });
   });
@@ -169,23 +176,23 @@ describe('设置持久化 — 读写与原子写入（T-16）', () => {
     const paths = tempPaths();
     saveSettings({ ...defaultSettings(), retentionDays: 5, paused: true }, paths);
 
-    const { settings } = updateSettings({ pasteMode: 'copyOnly' }, paths);
+    const { settings } = updateSettings({ alwaysOnTop: true }, paths);
 
-    assert.equal(settings.pasteMode, 'copyOnly', '新值生效');
+    assert.equal(settings.alwaysOnTop, true, '新值生效');
     assert.equal(settings.retentionDays, 5, '未指定的字段应保持');
     assert.equal(settings.paused, true, '未指定的字段应保持');
 
-    assert.equal(loadSettings(paths).settings.pasteMode, 'copyOnly', '更新必须落盘');
+    assert.equal(loadSettings(paths).settings.alwaysOnTop, true, '更新必须落盘');
   });
 
   test('updateSettings 的非法入参也会被校验（IPC 入参不可信）', () => {
     const paths = tempPaths();
     // 故意绕过类型检查：模拟渲染层经 IPC 送来的不可信数据
-    const untrusted = { retentionDays: -5, pasteMode: 'nope' } as unknown as { retentionDays: number; pasteMode: PasteMode };
+    const untrusted = { retentionDays: -5, alwaysOnTop: 'nope' } as unknown as { retentionDays: number; alwaysOnTop: boolean };
     const { settings, warnings } = updateSettings(untrusted, paths);
 
     assert.equal(settings.retentionDays, DEFAULT_RETENTION_DAYS);
-    assert.equal(settings.pasteMode, 'auto');
+    assert.equal(settings.alwaysOnTop, false);
     assert.ok(warnings.length >= 2);
   });
 });

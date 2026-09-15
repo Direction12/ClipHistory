@@ -12,7 +12,6 @@
 
 type ClipKind = 'text' | 'image';
 type ClipFilter = 'all' | ClipKind;
-type ClipPasteMode = 'auto' | 'copyOnly';
 
 interface ClipImageMeta {
   file: string;
@@ -41,8 +40,11 @@ interface ClipSettings {
   version: number;
   retentionDays: number;
   dedupWindowMs: number;
-  pasteMode: ClipPasteMode;
   paused: boolean;
+  /** 窗口置顶（始终显示在最前） */
+  alwaysOnTop: boolean;
+  /** 窗口透明度 0.4–1 */
+  opacity: number;
   windowBounds: { x: number; y: number; width: number; height: number };
 }
 
@@ -60,7 +62,6 @@ interface ClipDiagnostics {
 
 interface ClipPasteResult {
   ok: boolean;
-  mode: ClipPasteMode;
   autoPasted: boolean;
   notice?: string;
   error?: string;
@@ -83,8 +84,9 @@ interface ClipHistoryBridge {
   getSettings(): Promise<ClipEnvelope<ClipSettings>>;
   updateSettings(seed: {
     retentionDays?: number;
-    pasteMode?: ClipPasteMode;
     paused?: boolean;
+    alwaysOnTop?: boolean;
+    opacity?: number;
   }): Promise<ClipEnvelope<ClipSettings>>;
   onEntriesChanged(listener: () => void): () => void;
   onWatcherState(listener: (state: { paused?: boolean; openSettings?: boolean }) => void): () => void;

@@ -227,14 +227,14 @@ describe('IPC 设置', () => {
     const h = createHarness();
     const settings = (await h.call('getSettings')) as Settings;
     assert.equal(settings.retentionDays, defaultSettings().retentionDays);
-    assert.equal(settings.pasteMode, 'auto');
+    assert.equal(settings.alwaysOnTop, false);
   });
 
   test('更新设置返回校验后的结果', async () => {
     const h = createHarness();
-    const updated = (await h.call('updateSettings', { retentionDays: 5, pasteMode: 'copyOnly' })) as Settings;
+    const updated = (await h.call('updateSettings', { retentionDays: 5, alwaysOnTop: true })) as Settings;
     assert.equal(updated.retentionDays, 5);
-    assert.equal(updated.pasteMode, 'copyOnly');
+    assert.equal(updated.alwaysOnTop, true);
   });
 
   test('更新 paused 会同步给采集器（否则暂停只写进文件）', async () => {
@@ -255,10 +255,16 @@ describe('IPC 设置', () => {
     assert.match(error, /整数/);
   });
 
-  test('非法 pasteMode 被拒绝', async () => {
+  test('非布尔 alwaysOnTop 被拒绝', async () => {
     const h = createHarness();
-    const error = await h.rejectionOf('updateSettings', { pasteMode: 'always' });
-    assert.match(error, /pasteMode/);
+    const error = await h.rejectionOf('updateSettings', { alwaysOnTop: 'yes' });
+    assert.match(error, /alwaysOnTop/);
+  });
+
+  test('非数字 opacity 被拒绝', async () => {
+    const h = createHarness();
+    const error = await h.rejectionOf('updateSettings', { opacity: '半透明' });
+    assert.match(error, /opacity/);
   });
 
   test('非布尔 paused 被拒绝', async () => {

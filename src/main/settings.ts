@@ -6,8 +6,8 @@
  * 绝不因为单个字段非法而丢弃整个配置文件。
  */
 
-import { DATA_FORMAT_VERSION, DEFAULT_DEDUP_WINDOW_MS, DEFAULT_RETENTION_DAYS, DEDUP_WINDOW_MAX_MS, DEDUP_WINDOW_MIN_MS, RETENTION_MAX_DAYS, RETENTION_MIN_DAYS } from '../shared/constants';
-import type { PasteMode, Settings, WindowBounds } from '../shared/types';
+import { DATA_FORMAT_VERSION, DEFAULT_DEDUP_WINDOW_MS, DEFAULT_OPACITY, DEFAULT_RETENTION_DAYS, DEDUP_WINDOW_MAX_MS, DEDUP_WINDOW_MIN_MS, OPACITY_MAX, OPACITY_MIN, RETENTION_MAX_DAYS, RETENTION_MIN_DAYS } from '../shared/constants';
+import type { Settings, WindowBounds } from '../shared/types';
 import { ensureDataDirs, readTextIfExists, resolveDataPaths, writeFileAtomic, type DataPaths } from './paths';
 
 export const DEFAULT_WINDOW_BOUNDS: WindowBounds = {
@@ -23,8 +23,9 @@ export function defaultSettings(): Settings {
     version: DATA_FORMAT_VERSION,
     retentionDays: DEFAULT_RETENTION_DAYS,
     dedupWindowMs: DEFAULT_DEDUP_WINDOW_MS,
-    pasteMode: 'auto',
     paused: false,
+    alwaysOnTop: false,
+    opacity: DEFAULT_OPACITY,
     windowBounds: { ...DEFAULT_WINDOW_BOUNDS },
   };
 }
@@ -50,12 +51,13 @@ function coerceIntegerInRange(value: unknown, min: number, max: number, fallback
   return fallback;
 }
 
-function coercePasteMode(value: unknown, warnings: string[]): PasteMode {
-  if (value === 'auto' || value === 'copyOnly') {
+/** 透明度校验：非数字或越界都回退默认值 */
+function coerceOpacity(value: unknown, warnings: string[]): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= OPACITY_MIN && value <= OPACITY_MAX) {
     return value;
   }
-  warnings.push(`字段 pasteMode 非法（${JSON.stringify(value)}），已回退为 auto`);
-  return 'auto';
+  warnings.push(`字段 opacity 非法（${JSON.stringify(value)}），已回退为 ${String(DEFAULT_OPACITY)}`);
+  return DEFAULT_OPACITY;
 }
 
 function coerceBoolean(value: unknown, fallback: boolean, field: string, warnings: string[]): boolean {
@@ -104,8 +106,9 @@ export function coerceSettings(raw: unknown): SettingsLoadResult {
       version: DATA_FORMAT_VERSION,
       retentionDays: coerceIntegerInRange(raw.retentionDays, RETENTION_MIN_DAYS, RETENTION_MAX_DAYS, fallback.retentionDays, 'retentionDays', warnings),
       dedupWindowMs: coerceIntegerInRange(raw.dedupWindowMs, DEDUP_WINDOW_MIN_MS, DEDUP_WINDOW_MAX_MS, fallback.dedupWindowMs, 'dedupWindowMs', warnings),
-      pasteMode: coercePasteMode(raw.pasteMode, warnings),
       paused: coerceBoolean(raw.paused, fallback.paused, 'paused', warnings),
+      alwaysOnTop: coerceBoolean(raw.alwaysOnTop, fallback.alwaysOnTop, 'alwaysOnTop', warnings),
+      opacity: coerceOpacity(raw.opacity, warnings),
       windowBounds: coerceWindowBounds(raw.windowBounds, warnings),
     },
     warnings,

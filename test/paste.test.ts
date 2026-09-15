@@ -321,36 +321,6 @@ describe('写回剪贴板 — 图片（走 Windows 原生剪贴板）', () => {
 });
 
 describe('粘贴到前台窗口 — 模式与降级', () => {
-  test('copyOnly 模式不隐藏窗口、不发送按键，且不算失败', async () => {
-    const own = createStore();
-    const id = own.store.addText('仅复制模式').entry!.id;
-    const windowEvents: string[] = [];
-
-    let sendKeysCalled = false;
-    const service = buildPasteService({
-      store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      sendPasteKeys: async () => {
-        sendKeysCalled = true;
-        return { ok: true };
-      },
-      hideAppWindow: async () => {
-        windowEvents.push('hide');
-      },
-      showAppWindow: () => {
-        windowEvents.push('show');
-      },
-      getPasteMode: () => 'copyOnly',
-    });
-
-    const result = await service.pasteEntryToActiveWindow(id);
-
-    assert.equal(result.ok, true, '仅复制是用户的选择，不是失败');
-    assert.equal(result.autoPasted, false);
-    assert.equal(result.mode, 'copyOnly');
-    assert.deepEqual(windowEvents, [], '仅复制模式不应动窗口');
-    assert.equal(sendKeysCalled, false, '仅复制模式不应发送按键');
-  });
-
   test('auto 模式：隐藏窗口 → 等焦点回落 → 发送按键 → 恢复窗口', async () => {
     const h = createHarness({ mode: 'auto' });
     const own = createStore();

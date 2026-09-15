@@ -58,6 +58,11 @@ export const DEFAULT_WINDOW_BOUNDS = {
 export const MIN_WINDOW_WIDTH = 360;
 export const MIN_WINDOW_HEIGHT = 480;
 
+/** 窗口透明度合法范围与默认值（见 docs/需求规格说明书.md FR-13b） */
+export const OPACITY_MIN = 0.4;
+export const OPACITY_MAX = 1;
+export const DEFAULT_OPACITY = 1;
+
 /** 数据目录环境变量覆盖键：用于开发期隔离测试数据（见 docs/构建与运行.md §5） */
 export const DATA_DIR_ENV_KEY = 'CLIPHISTORY_DATA_DIR';
 

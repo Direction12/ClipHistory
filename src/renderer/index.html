@@ -76,11 +76,20 @@
         </section>
 
         <section class="field">
-          <div class="field__label">点击卡片默认动作</div>
-          <div class="field__hint">决定卡片主按钮是「复制」还是「复制并粘贴」。</div>
-          <div class="presets" role="group" aria-label="粘贴模式">
-            <button class="preset" type="button" data-mode="auto">复制并粘贴</button>
-            <button class="preset" type="button" data-mode="copyOnly">仅复制</button>
+          <div class="field__label">窗口置顶</div>
+          <div class="field__hint">开启后窗口始终显示在最前，点击其它程序时不会被遮挡。</div>
+          <label class="toggle">
+            <input id="always-on-top" type="checkbox" />
+            <span>让窗口始终显示在最前</span>
+          </label>
+        </section>
+
+        <section class="field">
+          <div class="field__label">窗口透明度</div>
+          <div class="field__hint">调低可减少对其它内容的遮挡（40%–100%）。</div>
+          <div class="slider-row">
+            <input id="opacity-input" class="slider" type="range" min="40" max="100" step="5" value="100" />
+            <span id="opacity-value" class="field__hint">100%</span>
           </div>
         </section>
 

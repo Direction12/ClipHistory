@@ -20,7 +20,6 @@
 import type {
   ClipEntryDetail,
   OperationResult,
-  PasteMode,
   PasteResult,
   PasteService,
 } from '../shared/types';
@@ -77,8 +76,6 @@ export interface PasteServiceOptions {
    * 原计划的「剪贴板序列号」判据在 Electron 44 已不可用（见 D-15），故改为显式声明。
    */
   readonly onSelfWrite: () => void;
-  /** 当前粘贴模式；决定卡片主按钮是「复制」还是「复制并粘贴」 */
-  readonly getPasteMode: () => PasteMode;
   readonly wait: (ms: number) => Promise<void>;
 }
 
@@ -98,7 +95,6 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
     restoreFocusToPreviousWindow,
     showAppWindow,
     onSelfWrite,
-    getPasteMode,
     wait,
   } = options;
 
@@ -151,16 +147,10 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
     writeEntryToClipboard,
 
     async pasteEntryToActiveWindow(id: string): Promise<PasteResult> {
-      const mode = getPasteMode();
       const copied = await writeEntryToClipboard(id);
 
       if (!copied.ok) {
-        return { ok: false, mode, autoPasted: false, error: copied.error };
-      }
-
-      // 「仅复制」是用户的选择，不尝试自动粘贴，也不算失败
-      if (mode === 'copyOnly') {
-        return { ok: true, mode, autoPasted: false };
+        return { ok: false, autoPasted: false, error: copied.error };
       }
 
       // 自动粘贴前必须先把窗口让出去，否则 Ctrl+V 会打到本应用自己身上
@@ -176,7 +166,6 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
         if (!focused.ok) {
           return {
             ok: true,
-            mode,
             autoPasted: false,
             notice: `${PASTE_FAILED_HINT}（${focused.error ?? '未能确定目标窗口'}）`,
           };
@@ -186,16 +175,15 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
         if (!sent.ok) {
           return {
             ok: true,
-            mode,
             autoPasted: false,
             notice: `${PASTE_FAILED_HINT}（${sent.error ?? '按键未能送达'}）`,
           };
         }
 
-        return { ok: true, mode, autoPasted: true };
+        return { ok: true, autoPasted: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        return { ok: true, mode, autoPasted: false, notice: `${PASTE_FAILED_HINT}（${reason}）` };
+        return { ok: true, autoPasted: false, notice: `${PASTE_FAILED_HINT}（${reason}）` };
       } finally {
         // 无论成功失败都要把界面还给用户，否则应用就像消失了一样
         if (hidWindow) {

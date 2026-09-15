@@ -17,7 +17,7 @@ import {
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
 } from '../shared/constants';
-import type { PasteMode, Settings, WindowBounds } from '../shared/types';
+import type { Settings, WindowBounds } from '../shared/types';
 import { ClipboardWatcher, createElectronClipboardSource } from './clipboard-watcher';
 import { CleanupScheduler } from './cleanup';
 import { createIpcHandlers, invokeSafely, type IpcDeps } from './ipc';
@@ -118,6 +118,15 @@ function notifySettingsChanged(): void {
  */
 function applyUserSettingsSeed(seed: SettingsSeed): Settings {
   const settings = applySettingsSeed(seed);
+  // 立即把窗口层面的设置应用到实际窗口（置顶 / 透明度），否则要重启才生效
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    if (seed.alwaysOnTop !== undefined) {
+      mainWindow.setAlwaysOnTop(settings.alwaysOnTop);
+    }
+    if (seed.opacity !== undefined) {
+      mainWindow.setOpacity(settings.opacity);
+    }
+  }
   notifySettingsChanged();
   return settings;
 }
@@ -164,6 +173,7 @@ function createMainWindow(): void {
   const preloadPath = join(__dirname, '..', 'preload', 'preload.js');
   const target = resolveRendererTarget();
   const bounds = resolveInitialBounds();
+  const settingsForWindow = readCurrentSettings();
 
   mainWindow = new BrowserWindow({
     x: bounds.x,
@@ -176,6 +186,9 @@ function createMainWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: '#FFF5F7',
     title: '历史粘贴',
+    // 置顶与透明度来自设置（FR-13a / FR-13b）
+    alwaysOnTop: settingsForWindow.alwaysOnTop,
+    opacity: settingsForWindow.opacity,
     webPreferences: {
       // 安全配置固定，不得放宽（见 docs/技术方案.md §3 与 CLAUDE.md §5.4）
       preload: preloadPath,
@@ -413,7 +426,6 @@ function buildIpcDeps(): IpcDeps {
     onSelfWrite: () => {
       watcher?.markSelfWrite();
     },
-    getPasteMode: (): PasteMode => readCurrentSettings().pasteMode,
     wait: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 

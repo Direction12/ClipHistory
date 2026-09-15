@@ -148,11 +148,14 @@ export function validateSettingsSeed(value: unknown): SettingsSeed {
   if (record.dedupWindowMs !== undefined) {
     seed.dedupWindowMs = requireNumericField(record.dedupWindowMs, 'dedupWindowMs', true);
   }
-  if (record.pasteMode !== undefined) {
-    if (record.pasteMode !== 'auto' && record.pasteMode !== 'copyOnly') {
-      throw new IpcValidationError('pasteMode 只能是 auto / copyOnly');
+  if (record.alwaysOnTop !== undefined) {
+    if (typeof record.alwaysOnTop !== 'boolean') {
+      throw new IpcValidationError('alwaysOnTop 必须是布尔值');
     }
-    seed.pasteMode = record.pasteMode;
+    seed.alwaysOnTop = record.alwaysOnTop;
+  }
+  if (record.opacity !== undefined) {
+    seed.opacity = requireNumericField(record.opacity, 'opacity', false);
   }
   if (record.paused !== undefined) {
     if (typeof record.paused !== 'boolean') {

@@ -55,7 +55,14 @@ export interface ClipEntryDetail extends ClipEntryMeta {
   text?: string;
 }
 
-/** 应用设置；对应 docs/存储与数据格式规范.md §2 */
+/**
+ * 应用设置；对应 docs/存储与数据格式规范.md §2。
+ *
+ * 变更记录（见 docs/需求规格说明书.md §9）：
+ * - 2026-09-15 CH-01 删除 `pasteMode`：卡片已同时提供「复制」「粘贴」两个按钮，设置项多余。
+ * - 2026-09-15 CH-02 新增 `alwaysOnTop`：让窗口能常驻在最前。
+ * - 2026-09-15 CH-03 新增 `opacity`：窗口常驻时避免过度遮挡。
+ */
 export interface Settings {
   /** 索引格式版本 */
   version: number;
@@ -63,10 +70,12 @@ export interface Settings {
   retentionDays: number;
   /** 去重窗口（ms），0–60000 */
   dedupWindowMs: number;
-  /** 粘贴行为模式 */
-  pasteMode: PasteMode;
   /** 是否暂停记录 */
   paused: boolean;
+  /** 窗口是否置顶（始终显示在最前） */
+  alwaysOnTop: boolean;
+  /** 窗口透明度，0.4–1（1 为完全不透明） */
+  opacity: number;
   /** 窗口位置与尺寸记忆 */
   windowBounds: WindowBounds;
 }
@@ -91,9 +100,11 @@ export interface OperationResult {
  * 为什么不用 `error` 表达「已复制但未能自动粘贴」：那是一个 `ok: true` 的
  * 部分成功场景，塞进 `error` 会让渲染层无法判断该当成功还是失败来提示。
  * 因此拆成 `autoPasted`（是否真的粘贴了）与 `notice`（如实告知用户下一步）。
+ *
+ * 注意：不再有 `mode` 字段 —— 「粘贴模式」设置已删除（见需求 CH-01），
+ * 卡片上的「复制」与「粘贴」两个按钮各自对应一个通道。
  */
 export interface PasteResult extends OperationResult {
-  mode: PasteMode;
   /** 是否已把内容自动粘贴到前台窗口 */
   autoPasted: boolean;
   /** 面向用户的补充说明，例如「请按 Ctrl+V」 */
@@ -217,8 +228,9 @@ export interface EntryRestorePayload {
 export interface SettingsSeedInput {
   retentionDays?: number;
   dedupWindowMs?: number;
-  pasteMode?: PasteMode;
   paused?: boolean;
+  alwaysOnTop?: boolean;
+  opacity?: number;
   windowBounds?: WindowBounds;
 }
 

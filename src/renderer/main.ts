@@ -41,7 +41,6 @@ function api(): ClipHistoryBridge {
 let currentFilter: ClipFilter = 'all';
 let currentQuery = '';
 let currentEntries: ClipEntryMeta[] = [];
-let currentSettings: ClipSettings | null = null;
 /** 删除撤销：记录被删条目与定时器，5 秒后放弃撤销机会 */
 let pendingUndo: { entry: ClipEntryDetail; timer: number } | null = null;
 
@@ -199,19 +198,13 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
   const actions = document.createElement('div');
   actions.className = 'card__actions';
 
-  const primaryLabel = currentSettings?.pasteMode === 'copyOnly' ? '复制' : '粘贴';
-  const primaryTitle =
-    currentSettings?.pasteMode === 'copyOnly'
-      ? '复制到剪贴板（当前设置：仅复制）'
-      : '复制并粘贴到当前窗口';
-
-  // 主按钮的文案与行为都由 pasteMode 决定（FR-13）。
-  // 这里保存按钮引用，便于设置变更时就地更新文案 —— 重建卡片会丢失按钮上的点击闭包。
-  const primaryButton = createActionButton(primaryLabel, primaryTitle, () => {
-    void runPrimaryAction(entry);
-  }, 'card__action--primary');
-  primaryButton.dataset.role = 'primary';
-  actions.appendChild(primaryButton);
+  // 卡片固定同时提供「粘贴」与「复制」两个按钮。
+  // 不再由设置决定主按钮 —— 「粘贴模式」设置已删除（见需求 CH-01）。
+  actions.appendChild(
+    createActionButton('粘贴', '复制并粘贴到当前窗口', () => {
+      void runPrimaryAction(entry);
+    }, 'card__action--primary'),
+  );
 
   actions.appendChild(
     createActionButton('复制', '仅复制到剪贴板，不切换窗口', () => {
@@ -313,17 +306,16 @@ async function reloadSettings(): Promise<void> {
   if (settings === null) {
     return;
   }
-  currentSettings = settings;
 
   pausedBanner.hidden = !settings.paused;
 
   for (const preset of document.querySelectorAll<HTMLButtonElement>('.preset[data-days]')) {
     preset.classList.toggle('is-active', Number(preset.dataset.days) === settings.retentionDays);
   }
-  for (const preset of document.querySelectorAll<HTMLButtonElement>('.preset[data-mode]')) {
-    preset.classList.toggle('is-active', preset.dataset.mode === settings.pasteMode);
-  }
   el<HTMLInputElement>('custom-days-input').value = String(settings.retentionDays);
+  el<HTMLInputElement>('always-on-top').checked = settings.alwaysOnTop;
+  el<HTMLInputElement>('opacity-input').value = String(Math.round(settings.opacity * 100));
+  el<HTMLSpanElement>('opacity-value').textContent = `${String(Math.round(settings.opacity * 100))}%`;
   el<HTMLDivElement>('retention-current').textContent = `当前：保留 ${String(settings.retentionDays)} 天`;
 
   const diagnostics = unwrap(await api().diagnostics(), '读取诊断信息');
@@ -336,21 +328,8 @@ async function reloadSettings(): Promise<void> {
       (diagnostics.damagedLines > 0 ? `· 跳过损坏行 ${String(diagnostics.damagedLines)}` : '');
   }
 
-  // 粘贴模式可能刚被改过，就地刷新主按钮文案。
-  // 为什么是「就地刷新」而不是重绘列表：点击行为绑定在按钮元素上，
-  // 重绘虽能更新文案，但更重且容易与列表渲染状态脱节；就地改文字最小且确定。
-  syncPrimaryButtons();
 }
 
-/** 按当前 pasteMode 同步所有卡片主按钮的文案与提示 */
-function syncPrimaryButtons(): void {
-  const copyOnly = currentSettings?.pasteMode === 'copyOnly';
-  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-role="primary"]')) {
-    button.textContent = copyOnly ? '复制' : '粘贴';
-    button.title = copyOnly ? '复制到剪贴板（当前设置：仅复制）' : '复制并粘贴到当前窗口';
-    button.setAttribute('aria-label', button.title);
-  }
-}
 
 // ---------- 各操作 ----------
 
@@ -451,13 +430,23 @@ async function applyRetentionDays(days: number): Promise<void> {
   await reloadSettings();
 }
 
-async function applyPasteMode(mode: 'auto' | 'copyOnly'): Promise<void> {
-  const updated = unwrap(await api().updateSettings({ pasteMode: mode }), '粘贴方式');
+
+async function applyAlwaysOnTop(enabled: boolean): Promise<void> {
+  const updated = unwrap(await api().updateSettings({ alwaysOnTop: enabled }), '窗口置顶');
   if (updated === null) {
     return;
   }
-  showToast(mode === 'copyOnly' ? '主按钮已改为「仅复制」' : '主按钮已改为「复制并粘贴」');
-  await reloadSettings();
+  showToast(updated.alwaysOnTop ? '窗口已置顶' : '已取消置顶');
+}
+
+async function applyOpacity(percent: number): Promise<void> {
+  // 立即在本地回显百分比，避免拖动时数字滞后
+  el<HTMLSpanElement>('opacity-value').textContent = `${String(percent)}%`;
+  const updated = unwrap(await api().updateSettings({ opacity: percent / 100 }), '窗口透明度');
+  if (updated === null) {
+    return;
+  }
+  el<HTMLSpanElement>('opacity-value').textContent = `${String(Math.round(updated.opacity * 100))}%`;
 }
 
 async function setPaused(paused: boolean): Promise<void> {
@@ -531,14 +520,20 @@ function setupSettingsPanel(): void {
       void applyRetentionDays(Number(preset.dataset.days));
     });
   }
-  for (const preset of document.querySelectorAll<HTMLButtonElement>('.preset[data-mode]')) {
-    preset.addEventListener('click', () => {
-      const mode = preset.dataset.mode;
-      if (mode === 'auto' || mode === 'copyOnly') {
-        void applyPasteMode(mode);
-      }
-    });
-  }
+
+  el<HTMLInputElement>('always-on-top').addEventListener('change', (event) => {
+    const target = event.target as HTMLInputElement;
+    void applyAlwaysOnTop(target.checked);
+  });
+
+  const opacityInput = el<HTMLInputElement>('opacity-input');
+  // 拖动时只在本地回显，松开才落盘 —— 避免每移动一格就打一次 IPC
+  opacityInput.addEventListener('input', () => {
+    el<HTMLSpanElement>('opacity-value').textContent = `${opacityInput.value}%`;
+  });
+  opacityInput.addEventListener('change', () => {
+    void applyOpacity(Number(opacityInput.value));
+  });
 
   el<HTMLButtonElement>('apply-days-button').addEventListener('click', () => {
     const input = el<HTMLInputElement>('custom-days-input');
