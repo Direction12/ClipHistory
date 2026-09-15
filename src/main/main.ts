@@ -6,19 +6,36 @@
  * 剪贴板采集、存储、托盘、真实 IPC 层分别在 Phase 3 / Phase 2 / Phase 4 接入。
  */
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import {
   APP_ID,
   DEFAULT_WINDOW_BOUNDS,
   DEV_SERVER_ENV_KEY,
+  IPC_EVENT,
   IPC_INVOKE,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
 } from '../shared/constants';
+import { ClipboardWatcher, createElectronClipboardSource } from './clipboard-watcher';
+import { CleanupScheduler } from './cleanup';
+import { ensureDataDirs, resolveDataPaths, type DataPaths } from './paths';
+import { loadSettings } from './settings';
+import { ClipStore } from './store';
 
 /** 主窗口引用；关闭后置空，以便再次唤起时重建 */
 let mainWindow: BrowserWindow | null = null;
+
+/** 数据路径与存储层；在 app ready 后初始化 */
+let dataPaths: DataPaths | null = null;
+let store: ClipStore | null = null;
+
+/** 采集器与清理器；初始化失败时为 null，界面仍需可用（只读历史） */
+let watcher: ClipboardWatcher | null = null;
+let cleanupScheduler: CleanupScheduler | null = null;
+
+/** 记录采集过程中的异常，供诊断接口暴露 */
+let lastWatcherError: string | null = null;
 
 /**
  * 开发模式下由环境变量指定 Vite dev server 地址；未设置则加载本地构建产物。
@@ -101,6 +118,106 @@ function createMainWindow(): void {
   }
 }
 
+/**
+ * 初始化存储层与采集器。任何一步失败都只记录并降级，不让应用起不来。
+ *
+ * 顺序有讲究：先建 store（历史可读），再起 watcher（开始记录），
+ * 最后由 CleanupScheduler.start() 立刻做一次启动清理。
+ */
+function initializeStorageAndWatcher(): void {
+  try {
+    dataPaths = resolveDataPaths();
+    ensureDataDirs(dataPaths);
+
+    const currentStore = new ClipStore({ paths: dataPaths });
+    currentStore.init();
+    store = currentStore;
+
+    // 去重窗口与期限都由设置驱动；每次采集时重新读取，保证改设置立即生效
+    currentStore.setDedupWindowProvider(() => {
+      const { settings } = loadSettings(dataPaths ?? resolveDataPaths());
+      return settings.dedupWindowMs;
+    });
+
+    const currentWatcher = new ClipboardWatcher({
+      source: createElectronClipboardSource(clipboard),
+      onError: (error) => {
+        lastWatcherError = error instanceof Error ? error.message : String(error);
+      },
+      onCapture: (captured) => {
+        handleCapture(captured);
+      },
+    });
+
+    // 启动时不采集剪贴板里已有的陈旧内容（见 docs/技术方案.md D-09）。
+    // 剪贴板读取是异步的，故先建基线再开轮询，避免首轮把旧内容记进来。
+    void currentWatcher
+      .primeBaseline()
+      .catch((error: unknown) => {
+        lastWatcherError = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        currentWatcher.start();
+      });
+    watcher = currentWatcher;
+
+    const scheduler = new CleanupScheduler({
+      store: currentStore,
+      getSettings: () => loadSettings(dataPaths ?? resolveDataPaths()).settings,
+    });
+    scheduler.start();
+    cleanupScheduler = scheduler;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`存储层/采集器初始化失败，应用将以只读状态运行：${reason}`);
+  }
+}
+
+/** 把一条采集结果写入 store，并通知渲染层刷新 */
+function handleCapture(captured: {
+  kind: 'text' | 'image';
+  text: string;
+  imagePngBytes: Buffer | null;
+  imageWidth: number;
+  imageHeight: number;
+}): void {
+  if (store === null) {
+    return;
+  }
+
+  if (captured.kind === 'image' && captured.imagePngBytes !== null) {
+    store.addImage(captured.imagePngBytes, captured.imageWidth, captured.imageHeight);
+  } else {
+    store.addText(captured.text);
+  }
+
+  // 日志只记类型与长度，绝不记录剪贴板原文（见 CLAUDE.md §5.6）
+  const size = captured.kind === 'image' ? (captured.imagePngBytes?.length ?? 0) : captured.text.length;
+  console.log(`已记录一条${captured.kind === 'image' ? '图片' : '文本'}内容（长度 ${String(size)}）`);
+
+  mainWindow?.webContents.send(IPC_EVENT.entriesChanged);
+}
+
+/**
+ * 诊断信息：只含计数与状态，**不含任何剪贴板内容**。
+ * 供冒烟自检与将来的「关于/诊断」面板使用。
+ */
+function buildHealthString(): string {
+  const stats = store?.stats();
+  const parts = [
+    '存储就绪',
+    `Electron ${process.versions.electron}`,
+    `条目 ${String(stats?.entries ?? 0)}`,
+    `采集${watcher?.isPaused === true ? '已暂停' : '运行中'}`,
+    watcher?.isRunning === true ? '轮询开' : '轮询关',
+    cleanupScheduler?.isRunning === true ? '清理开' : '清理关',
+  ];
+  if (lastWatcherError !== null) {
+    parts.push(`最近采集错误 ${lastWatcherError}`);
+  }
+  return parts.join(' · ');
+}
+
 function focusOrCreateWindow(): void {
   if (mainWindow === null) {
     createMainWindow();
@@ -130,14 +247,15 @@ function runSmokeTestIfRequested(): void {
 
   window.webContents.once('did-finish-load', () => {
     void window.webContents
-      .executeJavaScript('typeof window.clipHistory?.ping === "function"')
-      .then((bridgeReady: unknown) => {
+      .executeJavaScript('window.clipHistory?.ping?.()')
+      .then((pingResult: unknown) => {
         clearTimeout(timeout);
-        if (bridgeReady === true) {
-          console.log('冒烟自检通过：窗口已加载，且 preload 已注入 IPC 通路');
+        const result = pingResult as { ok?: boolean; message?: string } | undefined;
+        if (result?.ok === true) {
+          console.log(`冒烟自检通过：窗口已加载，preload 通路可用 —— ${String(result.message)}`);
           app.exit(0);
         } else {
-          console.error('冒烟自检失败：窗口已加载，但 window.clipHistory.ping 不可用');
+          console.error('冒烟自检失败：窗口已加载，但主进程自检未返回 ok');
           app.exit(1);
         }
       })
@@ -156,13 +274,14 @@ function runSmokeTestIfRequested(): void {
 }
 
 /**
- * 骨架期自检通道：确认「渲染层 → preload → 主进程」通路可用。
+ * 骨架期自检通道：确认「渲染层 → preload → 主进程」通路可用，
+ * 并顺带暴露存储层与采集器的状态计数。
  * 返回结果不含任何剪贴板内容（见 docs/编码规范.md §6 隐私要求）。
  */
 function registerDiagnosticHandlers(): void {
   ipcMain.handle(IPC_INVOKE.appPing, () => ({
     ok: true,
-    message: `主进程已就绪（Electron ${process.versions.electron}）`,
+    message: buildHealthString(),
   }));
 }
 
@@ -178,6 +297,7 @@ if (!gotSingleInstanceLock) {
 
   void app.whenReady().then(() => {
     app.setAppUserModelId(APP_ID);
+    initializeStorageAndWatcher();
     registerDiagnosticHandlers();
     createMainWindow();
     runSmokeTestIfRequested();
