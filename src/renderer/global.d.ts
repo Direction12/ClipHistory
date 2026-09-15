@@ -29,6 +29,10 @@ interface ClipEntryMeta {
   pinned: boolean;
   textPreview?: string;
   truncated?: boolean;
+  /** 全文文件是否仍在；false 表示已丢失 */
+  textAvailable?: boolean;
+  /** 图片文件是否仍在；false 表示已丢失 */
+  imageAvailable?: boolean;
   image?: ClipImageMeta;
 }
 

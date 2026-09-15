@@ -41,6 +41,8 @@ function api(): ClipHistoryBridge {
 let currentFilter: ClipFilter = 'all';
 let currentQuery = '';
 let currentEntries: ClipEntryMeta[] = [];
+/** 当前键盘选中的卡片下标；-1 表示未选中（见 docs/设计规范.md §7） */
+let selectedIndex = -1;
 /** 删除撤销：记录被删条目与定时器，5 秒后放弃撤销机会 */
 let pendingUndo: { entry: ClipEntryDetail; timer: number } | null = null;
 
@@ -66,12 +68,36 @@ const toastEl = el<HTMLDivElement>('toast');
 // ---------- 提示与状态 ----------
 
 function showToast(message: string, kind: 'ok' | 'warn' = 'ok'): void {
-  toastEl.textContent = message;
+  el<HTMLSpanElement>('toast-text').textContent = message;
   toastEl.className = `toast toast--${kind}`;
   toastEl.hidden = false;
-  window.setTimeout(() => {
+  if (toastTimer !== null) {
+    window.clearTimeout(toastTimer);
+  }
+  toastTimer = window.setTimeout(() => {
     toastEl.hidden = true;
+    hideToastAction();
   }, 1600);
+}
+
+let toastTimer: number | null = null;
+
+/** 在轻提示里显示一个可点动作（目前用于「撤销删除」） */
+function showToastAction(label: string, onAction: () => void): void {
+  const button = el<HTMLButtonElement>('toast-action');
+  button.textContent = label;
+  button.hidden = false;
+  button.onclick = (event) => {
+    event.stopPropagation();
+    onAction();
+  };
+}
+
+function hideToastAction(): void {
+  const button = el<HTMLButtonElement>('toast-action');
+  button.hidden = true;
+  button.onclick = null;
+  toastEl.onclick = null;
 }
 
 function setStatus(text: string, kind: 'ok' | 'fail' | 'pending' = 'ok'): void {
@@ -185,6 +211,18 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
     warn.textContent = '内容过长，已截断';
     meta.appendChild(warn);
   }
+
+  // 内容文件丢失时必须明确告知，而不是给一个点了没反应的卡片（设计规范 §5）
+  const contentMissing =
+    (entry.kind === 'text' && entry.textAvailable === false) ||
+    (entry.kind === 'image' && entry.imageAvailable === false);
+  if (contentMissing) {
+    const warn = document.createElement('span');
+    warn.className = 'card__sub card__sub--warn';
+    warn.textContent = entry.kind === 'image' ? '图片已丢失' : '全文已丢失';
+    meta.appendChild(warn);
+    card.classList.add('card--broken');
+  }
   body.appendChild(meta);
 
   if (entry.kind === 'text') {
@@ -200,17 +238,23 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
 
   // 卡片固定同时提供「粘贴」与「复制」两个按钮。
   // 不再由设置决定主按钮 —— 「粘贴模式」设置已删除（见需求 CH-01）。
-  actions.appendChild(
-    createActionButton('粘贴', '复制并粘贴到当前窗口', () => {
-      void runPrimaryAction(entry);
-    }, 'card__action--primary'),
-  );
+  const pasteButton = createActionButton('粘贴', '复制并粘贴到当前窗口', () => {
+    void runPrimaryAction(entry);
+  }, 'card__action--primary');
+  if (contentMissing) {
+    pasteButton.disabled = true;
+    pasteButton.title = '内容已丢失，无法粘贴';
+  }
+  actions.appendChild(pasteButton);
 
-  actions.appendChild(
-    createActionButton('复制', '仅复制到剪贴板，不切换窗口', () => {
-      void runCopy(entry);
-    }),
-  );
+  const copyButton = createActionButton('复制', '仅复制到剪贴板，不切换窗口', () => {
+    void runCopy(entry);
+  });
+  if (contentMissing) {
+    copyButton.disabled = true;
+    copyButton.title = '内容已丢失，无法复制';
+  }
+  actions.appendChild(copyButton);
   actions.appendChild(
     createActionButton(
       entry.pinned ? '取消置顶' : '置顶',
@@ -230,6 +274,40 @@ function renderCard(entry: ClipEntryMeta): HTMLElement {
   card.appendChild(thumb);
   card.appendChild(body);
   return card;
+}
+
+/** 更新选中态：只改 class，不重绘列表（重绘会丢失按钮上的点击闭包） */
+function applySelection(): void {
+  const cards = Array.from(listEl.querySelectorAll<HTMLElement>('.card'));
+  cards.forEach((card, index) => {
+    const isSelected = index === selectedIndex;
+    card.classList.toggle('card--selected', isSelected);
+    card.setAttribute('aria-selected', String(isSelected));
+    if (isSelected) {
+      // 选中项滚入可视区，键盘操作才不至于「选中了却看不到」
+      card.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+function moveSelection(delta: number): void {
+  if (currentEntries.length === 0) {
+    return;
+  }
+  const next = selectedIndex + delta;
+  if (next < 0 || next >= currentEntries.length) {
+    return;
+  }
+  selectedIndex = next;
+  applySelection();
+}
+
+/** 取当前选中项；越界返回 null */
+function selectedEntry(): ClipEntryMeta | null {
+  if (selectedIndex < 0 || selectedIndex >= currentEntries.length) {
+    return null;
+  }
+  return currentEntries[selectedIndex] ?? null;
 }
 
 function renderEmptyState(message: string, hint: string): void {
@@ -257,6 +335,10 @@ function renderEmptyState(message: string, hint: string): void {
 /** 按日期分组渲染整个列表 */
 function renderList(): void {
   listEl.replaceChildren();
+  // 列表变了，选中位置可能已失效：夹到合法范围内
+  if (selectedIndex >= currentEntries.length) {
+    selectedIndex = currentEntries.length - 1;
+  }
 
   if (currentEntries.length === 0) {
     const hasFilter = currentQuery !== '' || currentFilter !== 'all';
@@ -282,6 +364,7 @@ function renderList(): void {
   }
 
   countEl.textContent = `共 ${String(currentEntries.length)} 条`;
+  applySelection();
 }
 
 // ---------- 数据加载 ----------
@@ -391,15 +474,12 @@ async function runDelete(entry: ClipEntryMeta): Promise<void> {
   }, 5000);
   pendingUndo = { entry: detail, timer };
 
-  showToast('已删除，5 秒内可点这里撤销', 'ok');
-  toastEl.classList.add('toast--clickable');
-  await reload();
-
-  // 撤销入口：点击提示条
-  const undo = (): void => {
+  // 撤销入口用明确的按钮，而不是「点提示条本身」——后者用户看不出来能点（设计规范 §10）
+  showToast('已删除 1 条', 'ok');
+  showToastAction('撤销', () => {
     void runUndo();
-  };
-  toastEl.onclick = undo;
+  });
+  await reload();
 }
 
 async function runUndo(): Promise<void> {
@@ -409,8 +489,7 @@ async function runUndo(): Promise<void> {
   const { entry, timer } = pendingUndo;
   window.clearTimeout(timer);
   pendingUndo = null;
-  toastEl.onclick = null;
-  toastEl.classList.remove('toast--clickable');
+  hideToastAction();
 
   const restored = unwrap(await api().restoreEntry({ entry }), '撤销删除');
   if (restored === null) {
@@ -583,6 +662,56 @@ function setupKeyboard(): void {
       event.preventDefault();
       searchEl.focus();
       searchEl.select();
+      return;
+    }
+
+    // 键盘导航只在「焦点不在输入控件」时生效，否则会抢掉输入框的方向键
+    const active = document.activeElement;
+    const isTyping =
+      active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
+    if (isTyping) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      // 首次按下时从第一项开始，符合「按一下就选中」的直觉
+      if (selectedIndex < 0) {
+        selectedIndex = 0;
+        applySelection();
+        return;
+      }
+      moveSelection(1);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (selectedIndex < 0) {
+        selectedIndex = 0;
+        applySelection();
+        return;
+      }
+      moveSelection(-1);
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      const entry = selectedEntry();
+      if (entry !== null) {
+        event.preventDefault();
+        // Enter 的语义定为「粘贴到当前窗口」：这是历史工具的主动作（见设计规范 §7）
+        void runPrimaryAction(entry);
+      }
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+      const entry = selectedEntry();
+      if (entry !== null) {
+        event.preventDefault();
+        void runCopy(entry);
+      }
     }
   });
 }

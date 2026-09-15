@@ -454,5 +454,73 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   check(windowControls?.toggleChecked === true, '置顶开关反映了设置值（true）');
   check(windowControls?.sliderValue === '80', `透明度滑杆反映了设置值（实际 ${String(windowControls?.sliderValue)}）`);
 
+  // ---- 键盘导航与撤销按钮（Phase 6）----
+  //
+  // 为什么可自动化：键盘操作只依赖 DOM 与事件，不需要真实剪贴板交互。
+  // 这里真实派发 keydown，再读 DOM 状态，等价于用户按下方向键。
+  const keyboardProbe = (await evaluateInRenderer(`
+    (() => {
+      const cards = Array.from(document.querySelectorAll('.card'));
+      if (cards.length === 0) return { ok: false, reason: '列表为空，无法测键盘导航' };
+      const press = (key) => document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      const selectedCount = () => cards.filter((c) => c.classList.contains('card--selected')).length;
+
+      press('ArrowDown');
+      const afterFirst = { selected: selectedCount(), index: cards.findIndex((c) => c.classList.contains('card--selected')) };
+      press('ArrowDown');
+      const afterSecond = cards.findIndex((c) => c.classList.contains('card--selected'));
+      press('ArrowUp');
+      const afterUp = cards.findIndex((c) => c.classList.contains('card--selected'));
+      return { ok: true, afterFirst, afterSecond, afterUp, cardCount: cards.length };
+    })()
+  `)) as
+    | {
+        ok: boolean;
+        reason?: string;
+        afterFirst?: { selected: number; index: number };
+        afterSecond?: number;
+        afterUp?: number;
+        cardCount?: number;
+      }
+    | undefined;
+
+  check(
+    keyboardProbe?.ok === true && keyboardProbe.afterFirst?.selected === 1 && keyboardProbe.afterFirst.index === 0,
+    `方向键首次按下选中第一项（${JSON.stringify(keyboardProbe?.afterFirst)}）`,
+  );
+  check(
+    keyboardProbe?.afterSecond === 1 && keyboardProbe?.afterUp === 0,
+    `方向键可上下移动选中项（下=${String(keyboardProbe?.afterSecond)}，上=${String(keyboardProbe?.afterUp)}）`,
+  );
+
+  // 撤销入口必须是明确的按钮，而不是「点提示条本身」（设计规范 §10）
+  const undoProbe = (await evaluateInRenderer(`
+    (() => ({
+      hasUndoButton: document.getElementById('toast-action') !== null,
+      hasToastText: document.getElementById('toast-text') !== null,
+    }))()
+  `)) as { hasUndoButton: boolean; hasToastText: boolean } | undefined;
+  check(
+    undoProbe?.hasUndoButton === true && undoProbe.hasToastText === true,
+    '轻提示内提供明确的「撤销」按钮',
+  );
+
+  // 选中态必须有可见样式（否则键盘导航等于没用）
+  const selectionStyle = (await evaluateInRenderer(`
+    (() => {
+      const card = document.querySelector('.card');
+      if (card === null) return { ok: false };
+      card.classList.add('card--selected');
+      const style = window.getComputedStyle(card);
+      const result = { ok: true, borderColor: style.borderColor, background: style.backgroundColor };
+      card.classList.remove('card--selected');
+      return result;
+    })()
+  `)) as { ok: boolean; borderColor?: string; background?: string } | undefined;
+  const hasVisibleSelectionStyle =
+    (selectionStyle?.borderColor ?? '').includes('247, 168, 188') ||
+    (selectionStyle?.background ?? '').includes('253, 227, 234');
+  check(hasVisibleSelectionStyle, `选中态有可见样式（描边 ${String(selectionStyle?.borderColor)}）`);
+
   return { passed, failed: failures };
 }

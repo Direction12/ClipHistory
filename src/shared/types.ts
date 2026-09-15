@@ -45,6 +45,10 @@ export interface ClipEntryMeta {
   textPreview?: string;
   /** 仅 kind === 'text'：内容是否因超长被截断 */
   truncated?: boolean;
+  /** 仅 kind === 'text'：全文文件是否仍在。false 表示「全文已丢失」 */
+  textAvailable?: boolean;
+  /** 仅 kind === 'image'：图片文件是否仍在。false 表示「图片已丢失」 */
+  imageAvailable?: boolean;
   /** 仅 kind === 'image' */
   image?: ImageMeta;
 }

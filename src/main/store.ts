@@ -376,7 +376,13 @@ export class ClipStore {
 
   // ---------- 读取 ----------
 
-  /** 列表：按 updatedAt 降序；可按类型筛选与关键词搜索 */
+  /**
+   * 列表：按 updatedAt 降序；可按类型筛选与关键词搜索。
+   *
+   * 返回的每一项都会带上「内容是否仍在磁盘上」的标记（`textAvailable` /
+   * `imageAvailable`）—— 界面需要据此显示「全文已丢失 / 图片已丢失」，
+   * 而不是给用户一个点了没反应的空卡片（见 docs/设计规范.md §5）。
+   */
   list(options: ListOptions = {}): ClipEntryMeta[] {
     const kind = options.kind ?? 'all';
     const query = (options.query ?? '').trim();
@@ -387,7 +393,7 @@ export class ClipStore {
     );
 
     if (lowerCaseQuery === '') {
-      return byKind.sort(compareByUpdatedAtDesc);
+      return byKind.sort(compareByUpdatedAtDesc).map((meta) => this.withAvailability(meta));
     }
 
     // 先按预览粗筛，命中的直接保留；其余再读全文精确匹配（空白差异会让预览与全文不一致）
@@ -416,7 +422,17 @@ export class ClipStore {
       }
     }
 
-    return hits.sort(compareByUpdatedAtDesc);
+    return hits.sort(compareByUpdatedAtDesc).map((meta) => this.withAvailability(meta));
+  }
+
+  /** 附上「内容文件是否仍在」的标记，供界面显示丢失提示 */
+  private withAvailability(meta: ClipEntryMeta): ClipEntryMeta {
+    if (meta.kind === 'text') {
+      const contentFile = join(this.paths.contentDir, `${meta.id}.txt`);
+      return { ...meta, textAvailable: existsSync(contentFile) };
+    }
+    const imageFile = this.imageAbsolutePath(meta);
+    return { ...meta, imageAvailable: imageFile !== null };
   }
 
   /** 读取文本全文；不存在时返回 null（条目仍在，界面显示「全文已丢失」） */

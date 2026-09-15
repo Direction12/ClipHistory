@@ -246,6 +246,18 @@ body {
   border-left: 3px solid var(--color-primary);
 }
 
+/* 键盘选中态：必须清晰可辨，否则键盘导航等于没用（见 docs/设计规范.md §9） */
+.card--selected {
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow: var(--shadow-pop);
+}
+
+/* 选中卡片即使没有悬停也显示操作按钮 */
+.card--selected .card__actions {
+  opacity: 1;
+}
+
 .card__thumb {
   flex: 0 0 auto;
   width: var(--thumb-size);
@@ -705,9 +717,21 @@ body {
   color: var(--color-warn-text);
 }
 
-.toast--clickable {
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toast__action {
+  padding: 0 var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--font-xs);
   cursor: pointer;
-  text-decoration: underline;
 }
 
 /* ===== 动效与无障碍 ===== */
