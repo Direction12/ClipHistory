@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+dist-electron/
+out/
+release/
+.vite/
+
+# 日志与缓存
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.eslintcache
+*.tsbuildinfo
+
+# 编辑器与系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+Desktop.ini
+desktop.ini
+.DS_Store
+
+# 本地临时文件（数据目录位于系统 userData，绝不进仓库）
+tmp/
+*.tmp
