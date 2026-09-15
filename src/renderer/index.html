@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 纯本地应用，禁止外部资源加载与内联执行之外的任何来源（见 docs/编码规范.md §6） -->
+    <!-- 纯本地应用：只允许自身资源；不加载任何外部内容（见 docs/编码规范.md §6） -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
@@ -36,47 +36,80 @@
         <button id="settings-button" class="icon-button" type="button" title="设置" aria-label="设置">⚙️</button>
       </header>
 
-      <main class="list" aria-label="剪贴板历史列表">
-        <div class="notice notice--info">
-          <strong>Phase 1 骨架</strong>
-          <span>界面框架与设计令牌已就位；剪贴板采集、存储与托盘将在 Phase 2–4 接入。</span>
-        </div>
+      <div id="paused-banner" class="banner banner--warn" hidden>
+        <span>记录已暂停：新的复制内容不会被保存</span>
+        <button id="resume-button" class="text-button" type="button">恢复记录</button>
+      </div>
 
-        <section class="group" aria-label="今天">
-          <h2 class="group__title">今天</h2>
-
-          <article class="card card--placeholder" aria-disabled="true">
-            <div class="card__thumb" aria-hidden="true">文</div>
-            <div class="card__body">
-              <div class="card__meta"><span class="card__time">示例 14:32</span></div>
-              <p class="card__preview">这里是文字条目的预览区域，最多显示两行，超出以省略号截断。</p>
-            </div>
-          </article>
-
-          <article class="card card--placeholder" aria-disabled="true">
-            <div class="card__thumb card__thumb--image" aria-hidden="true">图</div>
-            <div class="card__body">
-              <div class="card__meta">
-                <span class="card__time">示例 14:15</span>
-                <span class="card__sub">1920 × 1080 · 278 KB</span>
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section class="empty" aria-label="空状态">
-          <div class="empty__icon" aria-hidden="true">📋</div>
-          <p class="empty__title">还没有记录，复制点东西试试</p>
-          <p class="empty__hint">应用在后台持续运行，你复制的文字和图片会自动出现在这里。</p>
-        </section>
-      </main>
+      <main id="list" class="list" aria-label="剪贴板历史列表" tabindex="-1"></main>
 
       <footer class="statusbar">
-        <span id="bridge-status" class="status status--pending">正在检测通信通路…</span>
+        <span id="status-text" class="status status--pending">正在加载…</span>
         <span class="statusbar__spacer"></span>
-        <button id="ping-button" class="text-button" type="button">重新检测</button>
+        <span id="status-count" class="status status--muted"></span>
+        <button id="refresh-button" class="text-button" type="button" title="刷新列表">刷新</button>
       </footer>
     </div>
+
+    <!-- 设置面板：单个弹层，不做弹窗套弹窗（见 docs/设计规范.md §10） -->
+    <div id="settings-panel" class="panel" hidden>
+      <div class="panel__header">
+        <h2 class="panel__title">设置</h2>
+        <button id="settings-close" class="icon-button" type="button" title="关闭" aria-label="关闭">✕</button>
+      </div>
+
+      <div class="panel__body">
+        <section class="field">
+          <div class="field__label">保存期限</div>
+          <div class="field__hint">超过期限且未置顶的记录会被自动清理；置顶记录永久保留。</div>
+          <div class="presets" role="group" aria-label="保存期限预设">
+            <button class="preset" type="button" data-days="1">1 天</button>
+            <button class="preset" type="button" data-days="3">3 天</button>
+            <button class="preset" type="button" data-days="5">5 天</button>
+          </div>
+          <div class="custom-days">
+            <label class="field__hint" for="custom-days-input">自定义（1–365 天）</label>
+            <input id="custom-days-input" class="number-input" type="number" min="1" max="365" step="1" />
+            <button id="apply-days-button" class="text-button" type="button">应用</button>
+          </div>
+          <div id="retention-current" class="field__hint"></div>
+        </section>
+
+        <section class="field">
+          <div class="field__label">点击卡片默认动作</div>
+          <div class="field__hint">决定卡片主按钮是「复制」还是「复制并粘贴」。</div>
+          <div class="presets" role="group" aria-label="粘贴模式">
+            <button class="preset" type="button" data-mode="auto">复制并粘贴</button>
+            <button class="preset" type="button" data-mode="copyOnly">仅复制</button>
+          </div>
+        </section>
+
+        <section class="field">
+          <div class="field__label">数据位置</div>
+          <div id="data-root" class="field__hint field__hint--mono"></div>
+          <div id="diagnostics-line" class="field__hint"></div>
+        </section>
+
+        <section class="field field--danger">
+          <div class="field__label">清空历史</div>
+          <div class="field__hint">将删除所有未置顶记录，置顶记录会保留。此操作需要确认。</div>
+          <button id="clear-button" class="danger-button" type="button">清空历史（保留置顶）</button>
+        </section>
+      </div>
+    </div>
+
+    <div id="confirm-dialog" class="modal" hidden>
+      <div class="modal__box" role="alertdialog" aria-labelledby="confirm-title">
+        <h3 id="confirm-title" class="modal__title">确认清空历史？</h3>
+        <p class="modal__text">将删除所有未置顶记录，置顶记录会保留。此操作不可撤销。</p>
+        <div class="modal__actions">
+          <button id="confirm-cancel" class="text-button" type="button">取消</button>
+          <button id="confirm-ok" class="danger-button" type="button">确认清空</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
 
     <script type="module" src="./main.js"></script>
   </body>

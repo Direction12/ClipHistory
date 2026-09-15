@@ -375,6 +375,299 @@ body {
   color: var(--color-text);
 }
 
+/* ===== 暂停提示条 ===== */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-sm);
+}
+
+.banner--warn {
+  background: var(--color-warn-bg);
+  color: var(--color-warn-text);
+}
+
+.banner .text-button {
+  color: var(--color-warn-text);
+  text-decoration: underline;
+}
+
+/* ===== 卡片操作区 ===== */
+.card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  /* 悬停或键盘聚焦时才显现，保持列表安静（见 docs/设计规范.md §6） */
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.card:hover .card__actions,
+.card:focus-within .card__actions {
+  opacity: 1;
+}
+
+/* 触摸/无悬停设备下始终可见，避免操作不可达 */
+@media (hover: none) {
+  .card__actions {
+    opacity: 1;
+  }
+}
+
+.card__action {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.card__action:hover {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+
+.card__action--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-invert);
+}
+
+.card__action--primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.card__action--danger:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.card__thumb--text {
+  font-size: var(--font-lg);
+}
+
+.card__thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.card__sub--warn {
+  color: var(--color-warn-text);
+}
+
+/* ===== 状态栏补充 ===== */
+.status--muted {
+  color: var(--color-text-muted);
+}
+
+/* ===== 设置面板 ===== */
+.panel {
+  position: fixed;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: var(--statusbar-height);
+  width: min(360px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-pop);
+  overflow-y: auto;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.panel__title {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.panel__body {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field__label {
+  font-size: var(--font-md);
+  margin-bottom: var(--space-1);
+}
+
+.field__hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-xs);
+  line-height: 1.6;
+}
+
+.field__hint--mono {
+  word-break: break-all;
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+.field--danger {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+
+.preset {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.preset:hover:not(.is-active) {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.preset.is-active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-invert);
+}
+
+.custom-days {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.number-input {
+  width: 80px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-sm);
+}
+
+.number-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.danger-button {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-input);
+  background: transparent;
+  color: var(--color-danger);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.danger-button:hover {
+  background: var(--color-warn-bg);
+}
+
+/* ===== 二次确认弹层 ===== */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 63, 68, 0.28);
+  z-index: 20;
+}
+
+.modal__box {
+  width: min(320px, calc(100% - var(--space-5)));
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-pop);
+}
+
+.modal__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-lg);
+}
+
+.modal__text {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+}
+
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.modal__actions .danger-button {
+  margin-top: 0;
+}
+
+/* ===== 轻提示 ===== */
+.toast {
+  position: fixed;
+  top: calc(var(--topbar-height) + var(--space-3));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-sm);
+  box-shadow: var(--shadow-pop);
+  z-index: 30;
+  max-width: calc(100% - var(--space-5));
+  text-align: center;
+}
+
+.toast--ok {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+
+.toast--warn {
+  background: var(--color-warn-bg);
+  color: var(--color-warn-text);
+}
+
+.toast--clickable {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 /* ===== 动效与无障碍 ===== */
 @media (prefers-reduced-motion: reduce) {
   * {

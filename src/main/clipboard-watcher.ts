@@ -203,7 +203,19 @@ export class ClipboardWatcher {
       return 'skipped-content-unchanged';
     }
 
-    this.lastSeen = { sequence, text: payload.text, imageFingerprint };
+    return await this.recordPayload(sequence, payload);
+  }
+
+  /**
+   * 记录一份已经确定「与上一轮不同」的内容。
+   * 抽出来是为了让测试接缝能复用同一套判定与记录逻辑，避免两处实现漂移。
+   */
+  private async recordPayload(sequence: number | null, payload: ClipboardPayload): Promise<PollOutcome> {
+    this.lastSeen = {
+      sequence,
+      text: payload.text,
+      imageFingerprint: fingerprintImage(payload.imagePngBytes),
+    };
 
     // 优先级：先让本应用自己的写回通过（避免自触发），再判断是否值得记录
     if (this.suppressNextCycle) {
@@ -268,6 +280,46 @@ export class ClipboardWatcher {
       this.onError(error);
       return null;
     }
+  }
+
+  /**
+   * 测试接缝：用给定内容替换「上一轮看到的内容」，使下一轮 `poll()` 必然判定为新内容。
+   *
+   * 用途：集成自检需要在没有真实用户复制的情况下驱动一次完整采集。
+   * 生产代码不得调用。
+   */
+  primeBaselineForTest(payload: ClipboardPayload): void {
+    this.lastSeen = {
+      sequence: null,
+      text: payload.text,
+      imageFingerprint: fingerprintImage(payload.imagePngBytes),
+    };
+    this.suppressNextCycle = false;
+  }
+
+  /**
+   * 测试接缝：让下一轮采集把给定内容当作**全新的复制**来处理。
+   *
+   * 为什么需要它：光靠 `primeBaselineForTest` 换内容仍可能落在 store 的去重窗口内
+   * （两次采集时间戳相同就会被判为重复），导致自检结果依赖时序。
+   * 这里显式推进采集器自身的时间基线，使内容判定与时间判定都不构成干扰。
+   *
+   * 注意：为避免破坏去重语义，这里只重置「采集器看到的上一轮内容」，
+   * 不修改 store 的去重窗口。
+   * 生产代码不得调用。
+   */
+  forceNewContentForTest(): void {
+    this.lastSeen = { sequence: null, text: '__smoke_previous__', imageFingerprint: null };
+    this.suppressNextCycle = false;
+  }
+
+  /**
+   * 测试接缝：直接记录一份内容，绕过「从剪贴板读取」这一步。
+   * 用于集成自检在没有真实剪贴板交互时验证「采集 → 落库 → IPC 查询」全链路。
+   * 生产代码不得调用。
+   */
+  pollWithPayloadForTest(payload: ClipboardPayload): void {
+    void this.recordPayload(null, payload);
   }
 }
 

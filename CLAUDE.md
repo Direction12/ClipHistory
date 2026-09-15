@@ -7,7 +7,7 @@
 |---|---|
 | 项目 | 历史粘贴（内部名 ClipHistory）：Windows 本地剪贴板历史工具，记录文字与图片 |
 | 工作目录 | `C:\Users\Direction\Desktop\历史粘贴` |
-| 当前阶段 | **Phase 4 待确认**（Phase 0–3 已完成并提交；Phase 3 遗留「真实剪贴板需人工确认」） |
+| 当前阶段 | **Phase 5 待确认**（Phase 0–4 已完成并提交；待人工验收：截图采集 `P3-06`、界面 `P4-09`） |
 | 技术栈 | Electron 44 + TypeScript 7 + tsc 构建（**已弃用 Vite**，原因见 `docs/构建与运行.md` §2.2），纯本地文件存储 |
 
 ---
@@ -122,3 +122,4 @@
 | 2026-09-15 | Phase 1 完成：骨架跑通（类型检查全绿、构建完整、冒烟自检通过）。**弃用 Vite**（沙箱禁止进程派生），改为 tsc + 自写脚本；新增平台约束 C-01（preload 必须自包含）与 C-02（渲染层产物路径） |
 | 2026-09-15 | Phase 2 完成：存储层（`paths.ts` / `content.ts` / `settings.ts` / `store.ts`）并测透——65 个用例全绿。新增平台约束 C-03（测试需 `registerHooks` 自定义同进程入口，`node --test` 方案被证伪）与 C-04（`package.json` 必须保持 CommonJS） |
 | 2026-09-15 | Phase 3 完成：采集器（`clipboard-watcher.ts`）与清理编排（`cleanup.ts`），101 个用例全绿；存储层已接入主进程。**重大变更**：Electron 44 剪贴板 API 不兼容旧写法（`readImage`/`writeImage`/`availableFormats` 被移除、全部异步），新增约束 C-05/C-06 与决策 D-13~D-15，Phase 5 的写回方案需据此修订 |
+| 2026-09-15 | Phase 4 完成：完整 IPC 层（`ipc.ts`）、界面（列表/搜索/筛选/卡片/设置面板）、托盘与生命周期、集成自检（`smoke.ts`）——140 个单测 + 34 项集成断言全绿。IPC 契约已冻结（含错误语义与 5 条纪律）；新增 D-16~D-19 |

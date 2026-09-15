@@ -1,9 +1,8 @@
 /**
- * 主进程入口：应用生命周期、单实例锁、窗口创建。
+ * 主进程入口：应用生命周期、单实例锁、窗口管理、托盘、IPC 注册。
  *
  * 职责边界：不参与 DOM 渲染（见 docs/技术方案.md §3）。
- * 本阶段（Phase 1）只做最小可运行骨架：一个窗口 + 一条 IPC 自检通道。
- * 剪贴板采集、存储、托盘、真实 IPC 层分别在 Phase 3 / Phase 2 / Phase 4 接入。
+ * 各阶段分工：存储层（Phase 2）、采集与清理（Phase 3）、窗口/托盘/IPC（Phase 4）。
  */
 
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
@@ -17,11 +16,16 @@ import {
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
 } from '../shared/constants';
+import type { PasteMode, Settings, WindowBounds } from '../shared/types';
 import { ClipboardWatcher, createElectronClipboardSource } from './clipboard-watcher';
 import { CleanupScheduler } from './cleanup';
+import { createIpcHandlers, invokeSafely, type IpcDeps } from './ipc';
+import { createPasteService } from './paste';
 import { ensureDataDirs, resolveDataPaths, type DataPaths } from './paths';
-import { loadSettings } from './settings';
+import { loadSettings, updateSettings as persistSettings, type SettingsSeed } from './settings';
+import { runIntegrationSmokeTest } from './smoke';
 import { ClipStore } from './store';
+import { createTray, type TrayHandle } from './tray';
 
 /** 主窗口引用；关闭后置空，以便再次唤起时重建 */
 let mainWindow: BrowserWindow | null = null;
@@ -33,44 +37,94 @@ let store: ClipStore | null = null;
 /** 采集器与清理器；初始化失败时为 null，界面仍需可用（只读历史） */
 let watcher: ClipboardWatcher | null = null;
 let cleanupScheduler: CleanupScheduler | null = null;
+let trayHandle: TrayHandle | null = null;
 
 /** 记录采集过程中的异常，供诊断接口暴露 */
 let lastWatcherError: string | null = null;
+
+/** 阻止「关窗即退出」，改由托盘菜单退出 */
+let isQuitting = false;
+
+/** 冒烟自检开关与超时（超时即视为失败并返回非零退出码） */
+const SMOKE_TEST_ENV_KEY = 'CLIPHISTORY_SMOKE_TEST';
+const SMOKE_TEST_TIMEOUT_MS = 30_000;
+
+/** 是否在冒烟自检模式（会拦截退出路径） */
+function isSmokeTest(): boolean {
+  return process.env[SMOKE_TEST_ENV_KEY] !== undefined;
+}
+
+/** 资产目录：开发时在项目根，打包后在 resources 下 */
+function resolveAssetsDir(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'assets') : join(__dirname, '..', '..', 'assets');
+}
+
+// ---------- 设置读写 ----------
+
+function currentPaths(): DataPaths {
+  return dataPaths ?? resolveDataPaths();
+}
+
+function readCurrentSettings(): Settings {
+  return loadSettings(currentPaths()).settings;
+}
+
+function applySettingsSeed(seed: SettingsSeed): Settings {
+  const { settings, warnings } = persistSettings(seed, currentPaths());
+  for (const warning of warnings) {
+    console.warn(`设置告警：${warning}`);
+  }
+  return settings;
+}
+
 
 /**
  * 开发模式下由环境变量指定 Vite dev server 地址；未设置则加载本地构建产物。
  * 注意：`npm run dev` 默认走本地文件（build 后启动），保证「能启动」不依赖 dev server。
  */
-/**
- * 冒烟自检开关。设置后应用会自行验证「渲染层已加载」并退出，
- * 供无图形界面的环境（CI、自动化验收）确认应用真能启动。
- *
- * 出现时机：脚本用它做启动自检；正常使用时不设置该变量，行为不受影响。
- */
-const SMOKE_TEST_ENV_KEY = 'CLIPHISTORY_SMOKE_TEST';
-
-/** 冒烟自检的兜底超时：超时即视为失败并返回非零退出码 */
-const SMOKE_TEST_TIMEOUT_MS = 15_000;
-
 function resolveRendererTarget(): { kind: 'url' | 'file'; value: string } {
   const devServer = process.env[DEV_SERVER_ENV_KEY];
   if (devServer && devServer.trim() !== '') {
     return { kind: 'url', value: devServer.trim() };
   }
   // dist/main/main.js → ../renderer/renderer/index.html
-  // 为什么是 renderer/renderer：渲染层用 tsconfig.renderer-build.json 编译，
-  // 其 rootDir=src、outDir=dist/renderer，故 src/renderer/index.html 对应
-  // dist/renderer/renderer/index.html（与编译出的 main.js 同级）。
+  // 为什么是 renderer/renderer：见 docs/技术方案.md C-02。
   return { kind: 'file', value: join(__dirname, '..', 'renderer', 'renderer', 'index.html') };
+}
+
+/** 读取记忆的窗口位置；非法或缺失则回退默认值 */
+function resolveInitialBounds(): WindowBounds {
+  const { windowBounds } = readCurrentSettings();
+  return {
+    x: windowBounds.x ?? DEFAULT_WINDOW_BOUNDS.x,
+    y: windowBounds.y ?? DEFAULT_WINDOW_BOUNDS.y,
+    width: windowBounds.width > 0 ? windowBounds.width : DEFAULT_WINDOW_BOUNDS.width,
+    height: windowBounds.height > 0 ? windowBounds.height : DEFAULT_WINDOW_BOUNDS.height,
+  };
+}
+
+/** 把窗口位置写回设置；写入失败不应影响使用 */
+function persistWindowBounds(): void {
+  if (mainWindow === null || mainWindow.isDestroyed() || mainWindow.isMinimized()) {
+    return;
+  }
+  try {
+    applySettingsSeed({ windowBounds: mainWindow.getBounds() });
+  } catch (error) {
+    console.warn(`保存窗口位置失败：${String(error)}`);
+  }
 }
 
 function createMainWindow(): void {
   const preloadPath = join(__dirname, '..', 'preload', 'preload.js');
   const target = resolveRendererTarget();
+  const bounds = resolveInitialBounds();
 
   mainWindow = new BrowserWindow({
-    width: DEFAULT_WINDOW_BOUNDS.width,
-    height: DEFAULT_WINDOW_BOUNDS.height,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
@@ -92,7 +146,7 @@ function createMainWindow(): void {
   });
 
   // 冒烟自检时把渲染层与 preload 的控制台输出透出来，否则 preload 报错会被静默吞掉
-  if (process.env[SMOKE_TEST_ENV_KEY] !== undefined) {
+  if (isSmokeTest()) {
     mainWindow.webContents.on('console-message', (event) => {
       console.log(`[渲染层/preload 控制台] ${event.message}（${event.sourceId}:${event.lineNumber}）`);
     });
@@ -100,6 +154,17 @@ function createMainWindow(): void {
       console.error(`preload 执行出错：${preloadPath} —— ${error.message}`);
     });
   }
+
+  // 关闭窗口 = 隐藏到托盘，不退出（FR-07）；只有托盘「退出」才真正结束进程。
+  // 自检模式下不拦截，否则进程无法自行结束。
+  mainWindow.on('close', (event) => {
+    if (isQuitting || isSmokeTest()) {
+      return;
+    }
+    event.preventDefault();
+    persistWindowBounds();
+    mainWindow?.hide();
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -116,6 +181,23 @@ function createMainWindow(): void {
   } else {
     void mainWindow.loadFile(target.value);
   }
+}
+
+/** 唤起已有窗口；不存在则重建 */
+function showMainWindow(): void {
+  if (mainWindow === null) {
+    createMainWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function focusOrCreateWindow(): void {
+  showMainWindow();
 }
 
 /**
@@ -200,7 +282,7 @@ function handleCapture(captured: {
 
 /**
  * 诊断信息：只含计数与状态，**不含任何剪贴板内容**。
- * 供冒烟自检与将来的「关于/诊断」面板使用。
+ * 供诊断接口与「关于」面板使用。
  */
 function buildHealthString(): string {
   const stats = store?.stats();
@@ -211,6 +293,7 @@ function buildHealthString(): string {
     `采集${watcher?.isPaused === true ? '已暂停' : '运行中'}`,
     watcher?.isRunning === true ? '轮询开' : '轮询关',
     cleanupScheduler?.isRunning === true ? '清理开' : '清理关',
+    trayHandle === null ? '托盘未就绪' : '托盘就绪',
   ];
   if (lastWatcherError !== null) {
     parts.push(`最近采集错误 ${lastWatcherError}`);
@@ -218,52 +301,167 @@ function buildHealthString(): string {
   return parts.join(' · ');
 }
 
-function focusOrCreateWindow(): void {
-  if (mainWindow === null) {
-    createMainWindow();
-    return;
-  }
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-  mainWindow.show();
-  mainWindow.focus();
+// ---------- IPC ----------
+
+function notifyEntriesChanged(): void {
+  mainWindow?.webContents.send(IPC_EVENT.entriesChanged);
 }
 
+/** 同步暂停状态到采集器、托盘与界面（三处必须一致，否则用户会看到矛盾状态） */
+function applyPausedState(paused: boolean): void {
+  watcher?.setPaused(paused);
+  trayHandle?.setPaused(paused);
+  mainWindow?.webContents.send(IPC_EVENT.watcherState, { paused });
+}
+
+function buildIpcDeps(): IpcDeps {
+  const paste = createPasteService({
+    store: {
+      // paste 只需要「按 id 取详情」这一项能力，故只注入这个函数而非整个 store
+      getDetail: (id: string) => store?.getDetail(id) ?? null,
+    },
+    clipboard,
+    onSelfWrite: () => {
+      watcher?.markSelfWrite();
+    },
+    getPasteMode: (): PasteMode => readCurrentSettings().pasteMode,
+  });
+
+  return {
+    getStore: () => store,
+    readSettings: readCurrentSettings,
+    updateSettings: applySettingsSeed,
+    setPaused: applyPausedState,
+    isPaused: () => watcher?.isPaused ?? readCurrentSettings().paused,
+    isWatcherRunning: () => watcher?.isRunning ?? false,
+    isCleanupRunning: () => cleanupScheduler?.isRunning ?? false,
+    getDataRoot: () => currentPaths().root,
+    paste,
+  };
+}
+
+function registerIpcHandlers(): void {
+  const handlers = createIpcHandlers(buildIpcDeps());
+
+  const routes: Array<[string, keyof typeof handlers]> = [
+    [IPC_INVOKE.entriesList, 'listEntries'],
+    [IPC_INVOKE.entriesGet, 'getEntry'],
+    [IPC_INVOKE.entriesSetPinned, 'setPinned'],
+    [IPC_INVOKE.entriesDelete, 'deleteEntry'],
+    [IPC_INVOKE.entriesRestore, 'restoreEntry'],
+    [IPC_INVOKE.entriesClear, 'clearEntries'],
+    [IPC_INVOKE.pasteCopy, 'copyEntry'],
+    [IPC_INVOKE.pasteToActive, 'pasteEntry'],
+    [IPC_INVOKE.settingsGet, 'getSettings'],
+    [IPC_INVOKE.settingsUpdate, 'updateSettings'],
+    [IPC_INVOKE.appDiagnostics, 'diagnostics'],
+  ];
+
+  for (const [channel, handlerName] of routes) {
+    const handler = handlers[handlerName] as (input: unknown) => unknown;
+    ipcMain.handle(channel, async (_event, payload: unknown) => invokeSafely(handler, payload));
+  }
+
+  // 兼容通道：只回答「主进程是否活着」与健康串，供快速自检
+  ipcMain.handle(IPC_INVOKE.appPing, async () =>
+    invokeSafely(() => ({ ok: true, message: buildHealthString() }), undefined),
+  );
+}
+
+// ---------- 托盘 ----------
+
+function initializeTray(): void {
+  trayHandle = createTray(resolveAssetsDir(), () => watcher?.isPaused ?? false, {
+    showWindow: showMainWindow,
+    togglePause: (paused: boolean) => {
+      applySettingsSeed({ paused });
+      applyPausedState(paused);
+    },
+    clearHistory: () => {
+      const { removed } = store?.clear(true) ?? { removed: 0 };
+      console.log(`托盘清空历史：移除 ${String(removed)} 条（置顶已保留）`);
+      notifyEntriesChanged();
+    },
+    openSettings: () => {
+      showMainWindow();
+      mainWindow?.webContents.send(IPC_EVENT.watcherState, { openSettings: true });
+    },
+    quit: () => {
+      isQuitting = true;
+      app.quit();
+    },
+  });
+
+  if (trayHandle === null) {
+    console.warn(`托盘图标未能创建（${join(resolveAssetsDir(), 'icon.png')} 不存在或不可读）`);
+  }
+}
+
+// ---------- 冒烟自检 ----------
+
 /**
- * 冒烟自检：等渲染层真的加载完成后打印一行结论并退出。
- * 用途见 SMOKE_TEST_ENV_KEY 的说明；不写入任何用户数据。
+ * 冒烟自检：等渲染层加载完成后，先校验 preload 通路，再驱动真实 IPC 处理器走完整流程。
+ *
+ * 为什么不等用户点击：图形界面无法在自动化环境里肉眼确认，
+ * 但「IPC 处理器能否正确读写真实 store」可以在无界面下完整验证（详见 src/main/smoke.ts）。
+ * 自检会写入数据，故运行时由 scripts/run-electron.mjs 把数据目录指向临时目录。
  */
 function runSmokeTestIfRequested(): void {
-  if (process.env[SMOKE_TEST_ENV_KEY] === undefined || mainWindow === null) {
+  if (!isSmokeTest() || mainWindow === null) {
     return;
   }
 
   const window = mainWindow;
   const timeout = setTimeout(() => {
-    console.error('冒烟自检失败：15s 内未收到渲染层加载完成事件');
+    console.error('冒烟自检失败：30s 内未完成');
     app.exit(1);
   }, SMOKE_TEST_TIMEOUT_MS);
 
   window.webContents.once('did-finish-load', () => {
-    void window.webContents
-      .executeJavaScript('window.clipHistory?.ping?.()')
-      .then((pingResult: unknown) => {
-        clearTimeout(timeout);
-        const result = pingResult as { ok?: boolean; message?: string } | undefined;
-        if (result?.ok === true) {
-          console.log(`冒烟自检通过：窗口已加载，preload 通路可用 —— ${String(result.message)}`);
-          app.exit(0);
-        } else {
-          console.error('冒烟自检失败：窗口已加载，但主进程自检未返回 ok');
-          app.exit(1);
+    void (async () => {
+      try {
+        const pingResult = (await window.webContents.executeJavaScript(
+          'window.clipHistory?.ping?.()',
+        )) as { ok?: boolean; data?: { ok?: boolean; message?: string } } | undefined;
+
+        if (pingResult?.ok !== true || pingResult.data?.ok !== true) {
+          throw new Error('preload 通路不可用：window.clipHistory.ping 未返回预期结果');
         }
-      })
-      .catch((error: unknown) => {
-        clearTimeout(timeout);
-        console.error(`冒烟自检失败：脚本求值出错 —— ${String(error)}`);
+        console.log(`冒烟自检：窗口已加载，preload 通路可用 —— ${String(pingResult.data.message)}`);
+
+        if (store === null || watcher === null) {
+          throw new Error('存储层或采集器未初始化，无法进行集成自检');
+        }
+
+        const result = await runIntegrationSmokeTest({
+          store,
+          watcher,
+          deps: buildIpcDeps(),
+          log: (line: string) => {
+            console.log(line);
+          },
+        });
+
+        console.log('');
+        if (result.failed.length > 0) {
+          console.error(`集成自检失败 ${String(result.failed.length)} 项：`);
+          for (const failure of result.failed) {
+            console.error(`  - ${failure}`);
+          }
+          app.exit(1);
+          return;
+        }
+
+        console.log(`集成自检通过：${String(result.passed)} 项断言全部符合预期`);
+        console.log(`健康状态：${buildHealthString()}`);
+        app.exit(0);
+      } catch (error) {
+        console.error(`冒烟自检失败：${error instanceof Error ? error.message : String(error)}`);
         app.exit(1);
-      });
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
   });
 
   window.webContents.once('did-fail-load', (_event, errorCode, errorDescription) => {
@@ -273,17 +471,7 @@ function runSmokeTestIfRequested(): void {
   });
 }
 
-/**
- * 骨架期自检通道：确认「渲染层 → preload → 主进程」通路可用，
- * 并顺带暴露存储层与采集器的状态计数。
- * 返回结果不含任何剪贴板内容（见 docs/编码规范.md §6 隐私要求）。
- */
-function registerDiagnosticHandlers(): void {
-  ipcMain.handle(IPC_INVOKE.appPing, () => ({
-    ok: true,
-    message: buildHealthString(),
-  }));
-}
+// ---------- 启动 ----------
 
 // 单实例锁：第二次启动时唤起已有实例，不重复常驻（见 docs/需求规格说明书.md FR-14）
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -298,8 +486,14 @@ if (!gotSingleInstanceLock) {
   void app.whenReady().then(() => {
     app.setAppUserModelId(APP_ID);
     initializeStorageAndWatcher();
-    registerDiagnosticHandlers();
+    initializeTray();
+    registerIpcHandlers();
     createMainWindow();
+
+    // 启动时把上次的暂停状态同步给托盘（否则托盘勾选与实际记录状态不符）
+    const settingsAtStartup = readCurrentSettings();
+    applyPausedState(settingsAtStartup.paused);
+
     runSmokeTestIfRequested();
 
     // macOS 习惯：点击 Dock 图标且无窗口时重建窗口（本项目以 Windows 为主，保留兼容）
@@ -311,8 +505,18 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('window-all-closed', () => {
-    // Phase 4 接入托盘后，此行为会改为「隐藏到托盘不退出」。
-    // 当前阶段无托盘，故按平台惯例退出，避免留下无窗口的僵尸进程。
-    app.quit();
+    // 关窗只是隐藏到托盘（FR-07），因此这里**不**退出应用；
+    // 只有托盘「退出」或冒烟自检才允许结束进程。
+    if (isQuitting || isSmokeTest()) {
+      app.quit();
+    }
+  });
+
+  app.on('before-quit', () => {
+    isQuitting = true;
+    persistWindowBounds();
+    watcher?.stop();
+    cleanupScheduler?.stop();
+    trayHandle?.destroy();
   });
 }

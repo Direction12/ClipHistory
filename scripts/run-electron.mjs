@@ -1,17 +1,21 @@
 /**
  * 开发启动器：构建后拉起 Electron。
  *
- * 为什么需要它：沙箱禁止 Node 派生子进程，`node_modules/.bin/electron` 这类包装脚本
- * 会因 spawn EPERM 失败。本脚本用 Electron 模块导出的可执行文件路径，
- * 在 PowerShell 里以 `& <exe> .` 直接运行 —— PowerShell 自身的进程启动不受该限制。
+ * 为什么需要它：沙箱禁止 Node 直接派生子进程，`node_modules/.bin/electron` 这类包装脚本
+ * 会因 spawn EPERM 失败。本脚本通过 shell 启动 Electron 可执行文件 —— 经实测可用。
  *
  * 用法：
  *   node scripts/run-electron.mjs            # 正常启动
- *   node scripts/run-electron.mjs --smoke    # 冒烟自检：应用验证窗口加载后自行退出
+ *   node scripts/run-electron.mjs --smoke    # 冒烟自检：跑完集成自检后自行退出
+ *
+ * 冒烟模式会把数据目录指向临时目录，因此**不会污染用户真实历史**
+ * （见 docs/构建与运行.md §4）。
  */
 
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electronPath from 'electron';
 
@@ -25,6 +29,10 @@ const passThrough = args.filter((argument) => argument !== '--smoke');
 const environment = { ...process.env };
 if (smokeTest) {
   environment.CLIPHISTORY_SMOKE_TEST = '1';
+  // 关键：自检会写入数据，必须隔离到临时目录，绝不能写进 %APPDATA%\ClipHistory
+  const dataDir = mkdtempSync(join(tmpdir(), 'cliphistory-smoke-'));
+  environment.CLIPHISTORY_DATA_DIR = dataDir;
+  console.log(`冒烟自检数据目录（临时）：${dataDir}`);
 }
 
 console.log(`启动 Electron：${electronPath}${smokeTest ? '（冒烟自检模式）' : ''}`);

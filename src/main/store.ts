@@ -605,4 +605,14 @@ export class ClipStore {
   appendRowForTest(meta: ClipEntryMeta): void {
     this.appendRow(meta);
   }
+
+  /**
+   * 测试接缝：把去重窗口强制设为 0，使「内容相同」不再被时间窗口吸收。
+   *
+   * 用途：集成自检要在无真实复制的情况下连续落库；若沿用默认 5 秒窗口，
+   * 两次采集会因时间戳相同而被判为重复动作。生产代码不得调用。
+   */
+  disableDedupForTest(): void {
+    this.dedupWindowMsProvider = () => 0;
+  }
 }

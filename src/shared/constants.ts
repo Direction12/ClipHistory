@@ -82,7 +82,9 @@ export const IPC_INVOKE = {
   pasteToActive: 'paste:toActive',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
-  /** 骨架期连通性自检；Phase 4 接入真实 IPC 层后保留用于诊断 */
+  /** 诊断计数与运行状态；不含任何剪贴板内容。供冒烟自检与故障排查使用 */
+  appDiagnostics: 'app:diagnostics',
+  /** 骨架期连通性自检；保留用于「主进程是否活着」的快速判定 */
   appPing: 'app:ping',
 } as const;
 
@@ -97,3 +99,6 @@ export const IPC_EVENT = {
 
 /** 渲染层挂载点全局名 */
 export const RENDERER_API_KEY = 'clipHistory';
+
+/** 命中「尚未实现」的通道时统一使用的错误文案前缀 */
+export const NOT_IMPLEMENTED_PREFIX = '该功能将在后续版本提供';
