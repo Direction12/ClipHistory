@@ -33,6 +33,22 @@ function createRecorder(result: CommandResult): Recorder {
   };
 }
 
+/**
+ * 取出本次调用实际执行的 PowerShell 脚本明文。
+ *
+ * 为什么不能直接断言命令行参数：脚本是用 `-EncodedCommand`（UTF-16LE + base64）传递的
+ * —— 这是为了避开命令行编码/引号问题（见 docs/技术方案.md C-15）。
+ * 所以这里先解码再断言，反而能更严格地验证脚本内容。
+ */
+function decodeScript(recorder: Recorder, index = 0): string {
+  const call = recorder.calls[index];
+  assert.ok(call !== undefined, '应已调用一次外部命令');
+  const encodedIndex = call.args.indexOf('-EncodedCommand');
+  assert.ok(encodedIndex >= 0, '必须用 -EncodedCommand 传递脚本，避免编码/引号被破坏');
+  const encoded = call.args[encodedIndex + 1] ?? '';
+  return Buffer.from(encoded, 'base64').toString('utf16le');
+}
+
 const OK: CommandResult = { ok: true, stdout: 'OK', stderr: '' };
 
 describe('原生剪贴板 — 写图片', () => {
@@ -48,7 +64,7 @@ describe('原生剪贴板 — 写图片', () => {
     assert.ok(call.args.includes('-STA'), 'Windows.Forms 剪贴板访问必须用 STA 线程模式');
     assert.ok(call.args.includes('-NoProfile'), '应避免受用户 profile 影响');
 
-    const script = call.args.join(' ');
+    const script = decodeScript(recorder);
     assert.match(script, /System\.Windows\.Forms/);
     assert.match(script, /System\.Drawing/);
     assert.match(script, /Clipboard\]::SetImage/);
@@ -96,7 +112,7 @@ describe('原生剪贴板 — 发送粘贴按键', () => {
     const result = await sendPasteKeys({ run: recorder.runner });
 
     assert.equal(result.ok, true);
-    const script = recorder.calls[0]!.args.join(' ');
+    const script = decodeScript(recorder);
     assert.match(script, /SendKeys/);
     assert.match(script, /\^v/);
     assert.ok(recorder.calls[0]!.args.includes('-STA'));

@@ -72,7 +72,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     },
   };
 
-  const service = createPasteService({
+  const service = buildPasteService({
     store: { getDetail: (id: string): ClipEntryDetail | null => store.getDetail(id) },
     clipboard,
     readImageBytes: async (relativePath: string) => {
@@ -128,20 +128,51 @@ function createStore(): ReturnType<typeof createTestStore> {
   return handle;
 }
 
+/** paste 的可注入选项（全部有默认值，用例只覆盖自己关心的那几项） */
+interface PasteOverrides {
+  store?: { getDetail(id: string): ClipEntryDetail | null };
+  clipboard?: ClipboardWriter;
+  readImageBytes?: (relativePath: string) => Promise<Buffer | null>;
+  sendPasteKeys?: () => Promise<{ ok: boolean; error?: string }>;
+  hideAppWindow?: () => Promise<void>;
+  restoreFocusToPreviousWindow?: () => Promise<{ ok: boolean; error?: string }>;
+  showAppWindow?: () => void;
+  onSelfWrite?: () => void;
+  getPasteMode?: () => 'auto' | 'copyOnly';
+  wait?: (ms: number) => Promise<void>;
+}
+
+/**
+ * 用默认值补齐后创建 paste 服务。
+ *
+ * 为什么要这个构建器：可选依赖已有 10 项，每个用例都写全会淹没真正的断言。
+ */
+function buildPasteService(overrides: PasteOverrides = {}): ReturnType<typeof createPasteService> {
+  // 未显式指定 store 时给一个空的（查任何 id 都返回 null）
+  const emptyStore = createStore();
+  return createPasteService({
+    store: { getDetail: (id: string): ClipEntryDetail | null => emptyStore.store.getDetail(id) },
+    clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
+    readImageBytes: async () => null,
+    sendPasteKeys: async () => ({ ok: true }),
+    hideAppWindow: async () => undefined,
+    // 默认「成功把焦点切回目标窗口」；专注测焦点逻辑的用例会覆盖它
+    restoreFocusToPreviousWindow: async () => ({ ok: true }),
+    showAppWindow: () => undefined,
+    onSelfWrite: () => undefined,
+    getPasteMode: () => 'auto',
+    wait: async () => undefined,
+    ...overrides,
+  });
+}
+
 describe('写回剪贴板 — 文本', () => {
   test('文本写回成功', async () => {
     const handle = createStore();
     const written: string[] = [];
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (id) => handle.store.getDetail(id) },
       clipboard: { writeText: async (t) => void written.push(t), writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const id = seedText(handle.store, '要复制的内容');
@@ -155,18 +186,12 @@ describe('写回剪贴板 — 文本', () => {
     const own = createStore();
     const written: string[] = [];
     let selfWrites = 0;
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
       clipboard: { writeText: async (t) => void written.push(t), writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
       onSelfWrite: () => {
         selfWrites += 1;
       },
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const id = own.store.addText('需要复制的内容').entry!.id;
@@ -180,7 +205,7 @@ describe('写回剪贴板 — 文本', () => {
   test('写回失败时不声明自写回（否则真正的外部复制会被漏记）', async () => {
     const own = createStore();
     let selfWrites = 0;
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (id) => own.store.getDetail(id) },
       clipboard: {
         writeText: async () => {
@@ -188,15 +213,9 @@ describe('写回剪贴板 — 文本', () => {
         },
         writeImagePng: async () => ({ ok: true }),
       },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
       onSelfWrite: () => {
         selfWrites += 1;
       },
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const id = own.store.addText('写不进去的内容').entry!.id;
@@ -208,16 +227,8 @@ describe('写回剪贴板 — 文本', () => {
   });
 
   test('条目不存在时给出可行动提示', async () => {
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: () => null },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.writeEntryToClipboard('不存在');
@@ -229,21 +240,13 @@ describe('写回剪贴板 — 文本', () => {
     const own = createStore();
     const id = own.store.addText('内容会被删').entry!.id;
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: {
         getDetail: (entryId): ClipEntryDetail | null => {
           const detail = own.store.getDetail(entryId);
           return detail === null ? null : { ...detail, text: undefined };
         },
       },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.writeEntryToClipboard(id);
@@ -260,7 +263,7 @@ describe('写回剪贴板 — 图片（走 Windows 原生剪贴板）', () => {
 
     const images: Buffer[] = [];
     let selfWrites = 0;
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
       clipboard: {
         writeText: async () => undefined,
@@ -270,14 +273,9 @@ describe('写回剪贴板 — 图片（走 Windows 原生剪贴板）', () => {
         },
       },
       readImageBytes: async () => TINY_PNG,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
       onSelfWrite: () => {
         selfWrites += 1;
       },
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.writeEntryToClipboard(id);
@@ -293,16 +291,8 @@ describe('写回剪贴板 — 图片（走 Windows 原生剪贴板）', () => {
     own.store.addImage(TINY_PNG, 1, 1);
     const id = own.store.list({ kind: 'image' })[0]!.id;
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.writeEntryToClipboard(id);
@@ -315,19 +305,13 @@ describe('写回剪贴板 — 图片（走 Windows 原生剪贴板）', () => {
     own.store.addImage(TINY_PNG, 1, 1);
     const id = own.store.list({ kind: 'image' })[0]!.id;
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
       clipboard: {
         writeText: async () => undefined,
         writeImagePng: async () => ({ ok: false, error: 'PowerShell 不可用' }),
       },
       readImageBytes: async () => TINY_PNG,
-      sendPasteKeys: async () => ({ ok: true }),
-      hideAppWindow: async () => undefined,
-      showAppWindow: () => undefined,
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.writeEntryToClipboard(id);
@@ -343,10 +327,8 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
     const windowEvents: string[] = [];
 
     let sendKeysCalled = false;
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
       sendPasteKeys: async () => {
         sendKeysCalled = true;
         return { ok: true };
@@ -357,9 +339,7 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
       showAppWindow: () => {
         windowEvents.push('show');
       },
-      onSelfWrite: () => undefined,
       getPasteMode: () => 'copyOnly',
-      wait: async () => undefined,
     });
 
     const result = await service.pasteEntryToActiveWindow(id);
@@ -376,19 +356,14 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
     const own = createStore();
     const id = own.store.addText('自动粘贴').entry!.id;
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
       hideAppWindow: async () => {
         h.windowEvents.push('hide');
       },
       showAppWindow: () => {
         h.windowEvents.push('show');
       },
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
       wait: async (ms) => {
         h.focusWaits.push(ms);
       },
@@ -402,15 +377,43 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
     assert.ok((h.focusWaits[0] ?? 0) > 0, '隐藏后必须等待焦点回落，否则会粘贴到自己身上');
   });
 
+  test('焦点未能切回目标窗口时不下发按键，而是提示手动粘贴（C-14 的核心修复）', async () => {
+    const own = createStore();
+    const id = own.store.addText('焦点切不回去').entry!.id;
+    const windowEvents: string[] = [];
+    let sendKeysCalled = false;
+
+    const service = buildPasteService({
+      store: { getDetail: (entryId) => own.store.getDetail(entryId) },
+      sendPasteKeys: async () => {
+        sendKeysCalled = true;
+        return { ok: true };
+      },
+      restoreFocusToPreviousWindow: async () => ({ ok: false, error: '当前前台为 Chrome_WidgetWin_1' }),
+      hideAppWindow: async () => {
+        windowEvents.push('hide');
+      },
+      showAppWindow: () => {
+        windowEvents.push('show');
+      },
+    });
+
+    const result = await service.pasteEntryToActiveWindow(id);
+
+    assert.equal(result.ok, true, '复制成功，整体仍是成功');
+    assert.equal(result.autoPasted, false, '没切回焦点就不算粘贴成功');
+    assert.equal(sendKeysCalled, false, '焦点没到位时绝不能发按键，否则会粘到错误的窗口');
+    assert.match(result.notice ?? '', /Ctrl\+V/);
+    assert.deepEqual(windowEvents, ['hide', 'show'], '失败也要把界面还回来');
+  });
+
   test('发送按键失败时降级为「已复制 + 提示手动粘贴」，不谎报已粘贴', async () => {
     const h = createHarness();
     const own = createStore();
     const id = own.store.addText('提权窗口场景').entry!.id;
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
       sendPasteKeys: async () => ({ ok: false, error: '目标窗口以管理员权限运行，无法注入按键' }),
       hideAppWindow: async () => {
         h.windowEvents.push('hide');
@@ -418,9 +421,6 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
       showAppWindow: () => {
         h.windowEvents.push('show');
       },
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.pasteEntryToActiveWindow(id);
@@ -433,20 +433,14 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
 
   test('复制失败时整体失败，且不触碰窗口', async () => {
     const h = createHarness();
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: () => null },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
       hideAppWindow: async () => {
         h.windowEvents.push('hide');
       },
       showAppWindow: () => {
         h.windowEvents.push('show');
       },
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.pasteEntryToActiveWindow('不存在');
@@ -461,20 +455,14 @@ describe('粘贴到前台窗口 — 模式与降级', () => {
     const id = own.store.addText('隐藏失败场景').entry!.id;
     const windowEvents: string[] = [];
 
-    const service = createPasteService({
+    const service = buildPasteService({
       store: { getDetail: (entryId) => own.store.getDetail(entryId) },
-      clipboard: { writeText: async () => undefined, writeImagePng: async () => ({ ok: true }) },
-      readImageBytes: async () => null,
-      sendPasteKeys: async () => ({ ok: true }),
       hideAppWindow: async () => {
         throw new Error('隐藏窗口失败');
       },
       showAppWindow: () => {
         windowEvents.push('show');
       },
-      onSelfWrite: () => undefined,
-      getPasteMode: () => 'auto',
-      wait: async () => undefined,
     });
 
     const result = await service.pasteEntryToActiveWindow(id);

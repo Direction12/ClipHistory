@@ -22,6 +22,7 @@ import { ClipboardWatcher, createElectronClipboardSource } from './clipboard-wat
 import { CleanupScheduler } from './cleanup';
 import { createIpcHandlers, invokeSafely, type IpcDeps } from './ipc';
 import { runCommand, sendPasteKeys, writePngToClipboard } from './native-clipboard';
+import { activateWindow, findPreviousWindow } from './window-focus';
 import { createPasteService, type ClipboardWriter } from './paste';
 import { ensureDataDirs, resolveDataPaths, type DataPaths } from './paths';
 import { loadSettings, updateSettings as persistSettings, type SettingsSeed } from './settings';
@@ -391,8 +392,18 @@ function buildIpcDeps(): IpcDeps {
     },
     sendPasteKeys: () => sendPasteKeys(nativeOptions),
     hideAppWindow: async () => {
-      // 隐藏本窗口，让焦点回落到用户原本的程序；否则 Ctrl+V 会打到自己身上
+      // 隐藏本窗口，让焦点有机会回落到用户原本的程序
       mainWindow?.hide();
+    },
+    restoreFocusToPreviousWindow: async () => {
+      // 关键：隐藏窗口并不会让焦点自动回到用户原本的程序（实测会停在上一个其它窗口上，
+      // 例如浏览器），必须显式切回，否则按键会静默打到错误的窗口（见技术方案 C-14）。
+      const target = await findPreviousWindow(process.pid, { run: runCommand });
+      if (target === null) {
+        return { ok: false, error: '未能找到可粘贴的目标窗口' };
+      }
+      const activated = await activateWindow(target, { run: runCommand });
+      return activated.ok ? { ok: true } : { ok: false, error: activated.detail };
     },
     showAppWindow: () => {
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
@@ -539,6 +550,22 @@ function runSmokeTestIfRequested(): void {
           },
           evaluateInRenderer: (expression: string) =>
             window.webContents.executeJavaScript(expression) as Promise<unknown>,
+          focusProbe: async () => {
+            // 让本窗口先退到后面，再验证「能否把焦点切回上一个窗口」。
+            // 这是自动粘贴的核心机制：切不回去，按键就会打进错误的窗口（C-14）。
+            if (mainWindow !== null && !mainWindow.isDestroyed()) {
+              mainWindow.blur();
+            }
+            const target = await findPreviousWindow(process.pid, { run: runCommand });
+            if (target === null) {
+              return { ok: false, detail: '未能找到可切回的目标窗口' };
+            }
+            const activated = await activateWindow(target, { run: runCommand });
+            return {
+              ok: activated.ok,
+              detail: activated.ok ? `已切回 ${target.className}` : activated.detail,
+            };
+          },
         });
 
         console.log('');

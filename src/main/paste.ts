@@ -53,10 +53,23 @@ export interface PasteServiceOptions {
   readonly store: EntryDetailReader;
   readonly clipboard: ClipboardWriter;
   readonly readImageBytes: ImageBytesReader;
-  /** 发送 Ctrl+V 到当前前台窗口 */
+  /**
+   * 发送 Ctrl+V 到**当前前台窗口**。
+   *
+   * 注意：按键只会送给前台窗口。因此调用方必须在发送前确保焦点已在目标程序上
+   * （见 `restoreFocusToPreviousWindow`），否则按键会静默落到错误的窗口 ——
+   * 这正是「点粘贴没反应/粘错地方」的根因，见 docs/技术方案.md C-14。
+   */
   readonly sendPasteKeys: () => Promise<OperationResult>;
-  /** 隐藏本应用窗口，使焦点回落到用户原本的窗口 */
+  /** 隐藏本应用窗口，使焦点有机会回落到用户原本的窗口 */
   readonly hideAppWindow: () => Promise<void>;
+  /**
+   * 隐藏窗口后，**显式**把焦点交还给用户原本的程序。
+   *
+   * 为什么不能只靠隐藏：实测隐藏我们的窗口后焦点**不会**自动回落（会停在上一个
+   * 活跃的其它窗口上，例如浏览器），于是 Ctrl+V 打进浏览器。必须显式切回。
+   */
+  readonly restoreFocusToPreviousWindow: () => Promise<OperationResult>;
   /** 重新显示本应用窗口（自动粘贴后把界面还回来） */
   readonly showAppWindow: () => void;
   /**
@@ -69,12 +82,11 @@ export interface PasteServiceOptions {
   readonly wait: (ms: number) => Promise<void>;
 }
 
-/** 隐藏窗口后等待焦点回落的时间（ms）。太短会粘贴到本窗口自己 */
-const FOCUS_HANDOFF_MS = 220;
+/** 隐藏窗口后等待焦点回落的时间（ms） */
+const FOCUS_HANDOFF_MS = 200;
 
-/** LIM-01：提权窗口无法接收模拟按键时的提示 */
-const ELEVATED_WINDOW_HINT =
-  '无法自动粘贴（目标窗口可能以管理员权限运行）。内容已复制到剪贴板，请按 Ctrl+V';
+/** LIM-01：目标窗口无法接收模拟按键时的提示 */
+const PASTE_FAILED_HINT = '内容已复制到剪贴板，但未能自动粘贴，请按 Ctrl+V';
 
 export function createPasteService(options: PasteServiceOptions): PasteService {
   const {
@@ -83,6 +95,7 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
     readImageBytes,
     sendPasteKeys,
     hideAppWindow,
+    restoreFocusToPreviousWindow,
     showAppWindow,
     onSelfWrite,
     getPasteMode,
@@ -157,20 +170,32 @@ export function createPasteService(options: PasteServiceOptions): PasteService {
         hidWindow = true;
         await wait(FOCUS_HANDOFF_MS);
 
+        // 关键一步：隐藏窗口**不会**让焦点自动回到用户原本的程序，
+        // 必须显式切回；否则按键会被静默送到错误的窗口（见 C-14）。
+        const focused = await restoreFocusToPreviousWindow();
+        if (!focused.ok) {
+          return {
+            ok: true,
+            mode,
+            autoPasted: false,
+            notice: `${PASTE_FAILED_HINT}（${focused.error ?? '未能确定目标窗口'}）`,
+          };
+        }
+
         const sent = await sendPasteKeys();
         if (!sent.ok) {
           return {
             ok: true,
             mode,
             autoPasted: false,
-            notice: sent.error ?? ELEVATED_WINDOW_HINT,
+            notice: `${PASTE_FAILED_HINT}（${sent.error ?? '按键未能送达'}）`,
           };
         }
 
         return { ok: true, mode, autoPasted: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        return { ok: true, mode, autoPasted: false, notice: `${ELEVATED_WINDOW_HINT}（${reason}）` };
+        return { ok: true, mode, autoPasted: false, notice: `${PASTE_FAILED_HINT}（${reason}）` };
       } finally {
         // 无论成功失败都要把界面还给用户，否则应用就像消失了一样
         if (hidWindow) {

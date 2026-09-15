@@ -96,6 +96,19 @@ export interface NativeClipboardOptions {
   readonly tempDir?: string;
 }
 
+/**
+ * 执行一段 PowerShell 脚本。
+ *
+ * **为什么必须用 `-EncodedCommand` 而不是 `-Command`**：实测（见 docs/技术方案.md C-15）
+ * 通过命令行把脚本（尤其含中文或引号时）传给 PowerShell 会**被编码破坏** ——
+ * 例如 `AppActivate('记事本')` 因中文变乱码而直接失败，且错误信息本身也是乱码。
+ * `-EncodedCommand` 以 UTF-16LE + base64 传递，彻底避开该问题，脚本里的引号也无需转义。
+ */
+export function runPowerShell(script: string, run: CommandRunner): Promise<CommandResult> {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded]);
+}
+
 /** 把 PowerShell 的单引号字符串字面量做转义（路径可能含单引号） */
 function quoteForPowerShell(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
@@ -126,6 +139,7 @@ export async function writePngToClipboard(
     const pngPath = join(workDir, 'clip.png');
     await writeFile(pngPath, pngBytes);
 
+    // 用 -EncodedCommand 传递脚本：避免命令行编码/引号问题（见技术方案 C-15）
     const script = [
       "$ErrorActionPreference = 'Stop'",
       'Add-Type -AssemblyName System.Windows.Forms',
@@ -136,16 +150,10 @@ export async function writePngToClipboard(
       '$image.Dispose()',
       '$bitmap.Dispose()',
       "Write-Output 'OK'",
-    ].join('; ');
+    ].join('\n');
 
     // -STA 是 Windows.Forms 剪贴板访问的必要条件（否则会抛线程模式异常）
-    const result = await options.run('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-STA',
-      '-Command',
-      script,
-    ]);
+    const result = await runPowerShell(script, options.run);
 
     if (!result.ok) {
       return { ok: false, error: `写入图片到剪贴板失败：${explainFailure(result)}` };
@@ -174,15 +182,9 @@ export async function sendPasteKeys(options: NativeClipboardOptions): Promise<Op
     'Add-Type -AssemblyName System.Windows.Forms',
     "[System.Windows.Forms.SendKeys]::SendWait('^v')",
     "Write-Output 'OK'",
-  ].join('; ');
+  ].join('\n');
 
-  const result = await options.run('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-STA',
-    '-Command',
-    script,
-  ]);
+  const result = await runPowerShell(script, options.run);
 
   if (!result.ok) {
     return { ok: false, error: `发送粘贴按键失败：${explainFailure(result)}` };

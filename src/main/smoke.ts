@@ -36,6 +36,13 @@ export interface SmokeContext {
    * （preload 未注入、常量未内联、属性名不匹配等都会在这里暴露）。
    */
   readonly evaluateInRenderer: (expression: string) => Promise<unknown>;
+  /**
+   * 自检「能否把焦点切回上一个窗口」。
+   *
+   * 由 main 注入真实实现（会打开一个记事本当靶子窗口、查找它、切回它）。
+   * 不注入时跳过该项检查。
+   */
+  readonly focusProbe?: () => Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface SmokeResult {
@@ -50,7 +57,7 @@ const SMOKE_TEXT = '集成自检文本 Alpha 42';
  * 执行集成自检。返回通过/失败项，由调用方决定退出码。
  */
 export async function runIntegrationSmokeTest(context: SmokeContext): Promise<SmokeResult> {
-  const { store, watcher, deps, log, evaluateInRenderer } = context;
+  const { store, watcher, deps, log, evaluateInRenderer, focusProbe } = context;
   const failures: string[] = [];
   let passed = 0;
 
@@ -395,6 +402,16 @@ export async function runIntegrationSmokeTest(context: SmokeContext): Promise<Sm
   check(afterClear.pinned >= 1, `清空后置顶条目保留（${String(afterClear.pinned)} 条）`);
   check(afterClear.entries === afterClear.pinned, '清空后只剩置顶条目');
   check(clearResult.removed >= 1, `清空返回移除数量（${String(clearResult.removed)}）`);
+
+  // ---- 焦点交还能力自检（C-14 的核心修复）----
+  //
+  // 为什么必须实测这一项：自动粘贴依赖「把焦点切回用户原本的程序」，
+  // 而 Windows 的 SetForegroundWindow 受前台锁限制、会**静默失败**。
+  // 若这里不成立，用户点「粘贴」就会把内容打进错误的窗口（甚至是浏览器）。
+  if (focusProbe !== undefined) {
+    const result = await focusProbe();
+    check(result.ok, `能把焦点切回上一个窗口（${result.detail}）`);
+  }
 
   // ---- 粘贴模式驱动主按钮文案（FR-13）----
   // 放在最后：它会改设置，前面的断言依赖 retentionDays/pasteMode 的已知状态。
