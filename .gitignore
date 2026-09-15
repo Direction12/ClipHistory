@@ -6,6 +6,8 @@ dist/
 dist-electron/
 out/
 release/
+release-probe/
+.electron-builder-cache/
 .vite/
 .npm-cache/
 

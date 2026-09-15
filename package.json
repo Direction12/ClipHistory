@@ -17,7 +17,7 @@
     "smoke": "node scripts/build-all.mjs && node scripts/run-electron.mjs --smoke",
     "start": "npm run dev",
     "gen:icons": "node scripts/generate-icons.mjs",
-    "dist": "node scripts/build-all.mjs && electron-builder --win"
+    "dist": "node scripts/build-all.mjs && node scripts/build-portable.mjs"
   },
   "build": {
     "appId": "com.direction.cliphistory",
