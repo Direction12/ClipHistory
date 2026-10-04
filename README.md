@@ -1,5 +1,7 @@
 # 历史粘贴（ClipHistory）
 
+[![CI](https://github.com/Direction12/ClipHistory/actions/workflows/ci.yml/badge.svg)](https://github.com/Direction12/ClipHistory/actions/workflows/ci.yml)
+
 一个运行在 Windows 上的**本地剪贴板历史工具**：自动记录你复制的文字与图片，按时间降序展示，
 支持置顶、删除、搜索、类型筛选，并可一键复制或**自动粘贴**回你原本的程序。
 
@@ -40,14 +42,27 @@
 
 ## 从源码构建
 
-需要 Node.js ≥ 20。
+需要 **Node.js ≥ 24**（测试入口 `test/run-tests.mjs` 依赖 `node:module` 的 `registerHooks`，该 API 要求 Node 24）。
 
 ```powershell
 npm install
-npm test          # 单元测试（153 项）
-npm run smoke     # 集成自检（62 项断言，无需人工点击）
+npm run typecheck # 四个 tsconfig 的类型检查
+npm test          # 单元测试（166 项）
+npm run smoke     # 集成自检（64 项断言，无需人工点击）
 npm run dev       # 开发模式启动
 npm run dist      # 产出免安装目录到 release/
 ```
+
+> 只改 tsc 编译的代码时用 `npm run dev` 即可；`npm run smoke` 会真实启动一次 Electron 并跑完整条数据链路，
+> 是定位界面故障最快的手段。
+
+## 参与贡献
+
+欢迎 Issue 与 PR。动手前请先读 [`CLAUDE.md`](CLAUDE.md)（开发纪律）与 [`docs/编码规范.md`](docs/编码规范.md)；
+提交前至少保证 `npm run typecheck` 与 `npm test` 全绿。
+
+## 许可
+
+[MIT](LICENSE) © 2026 Direction
 
 开发规范、技术方案、设计规范等标准文档见 [`docs/`](docs/)，开发进度与待办见 [`devlog/`](devlog/)。

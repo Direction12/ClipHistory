@@ -1,0 +1,25 @@
+# 统一按 LF 存入库，避免 Windows（core.autocrlf=true）与 Linux/macOS 之间
+# 因行尾差异产生「整文件 diff」的噪声提交。见 devlog/待办事项.md P0-07。
+* text=auto eol=lf
+
+# 这些文件天然是二进制，禁止任何行尾转换与文本 diff
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.node binary
+*.woff binary
+*.woff2 binary
+
+# 锁文件不参与 diff 统计，避免污染 PR 的体积视图
+package-lock.json -diff linguist-generated
+
+# PowerShell 脚本按 CRLF 落地，避免部分 Windows 工具链解析异常
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

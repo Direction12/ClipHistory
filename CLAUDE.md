@@ -6,9 +6,9 @@
 | 项 | 内容 |
 |---|---|
 | 项目 | 历史粘贴（内部名 ClipHistory）：Windows 本地剪贴板历史工具，记录文字与图片 |
-| 工作目录 | `C:\Users\Direction\Desktop\历史粘贴` |
+| 工作目录 | 仓库根目录（本文档所在目录）。**任何文档与脚本都不得硬编码本机绝对路径** |
 | 当前阶段 | **Phase 0–7 全部完成 + Phase 6 撤销修复**（166 单测 + 64 项集成断言全绿；免安装包已重装并复跑自检 64/64）。待人工验收：截图采集 `P3-06`、界面 `P4-09`、自动粘贴 `P5-05`、观感 `P6-05`、删除图片后撤销 `P6-08`、免安装包 `P7-04` |
-| 技术栈 | Electron 44 + TypeScript 7 + tsc 构建（**已弃用 Vite**，原因见 `docs/构建与运行.md` §2.2），纯本地文件存储 |
+| 技术栈 | Electron 44 + TypeScript 7 + tsc 构建（**已弃用 Vite**，原因见 `docs/构建与运行.md` §2.2），纯本地文件存储。**要求 Node.js ≥ 24**（测试入口依赖 `node:module` 的 `registerHooks`） |
 
 ---
 
@@ -133,3 +133,4 @@
 | 2026-09-15 | Phase 7 完成：electron-builder 的打包动作可用但**必须联网下载 Electron 发行版**（本机 github 不可达）→ 改为复用本地运行时**手工组装免安装目录**（`scripts/build-portable.mjs`，零网络），产物**实测能启动并通过 62 项自检**；新增 C-19/C-20；`README.md` 与 `npm run dist` 均就绪 |
 | 2026-09-15 | Phase 6 完成：键盘导航（↑↓/Enter/Ctrl+C）与选中态、撤销改为明确按钮、内容丢失标注、**真实缩略图**（只读 `clipimg://`）——新增 C-17、C-18；153 单测 + **62 项集成断言**全绿 |
 | 2026-09-15 | Phase 6 修复（用户问「被删除的文件去哪了」时核查发现）：删除图片时 PNG 被当场抹掉，撤销回来的卡片显示「图片已丢失」，与 FR-09 的承诺不符。改为**延迟删除**：原始文件搬进数据目录 `trash/` 暂存，撤销原样搬回，超时与启动即清空——新增 D-21 与 LIM-05；`test/trash.test.ts` 13 例防回归，集成断言增至 **64 项** |
+| 2026-10-04 | 开源准备：新增 `LICENSE`（MIT）、`.gitattributes`（统一 LF，落实 P0-07）、`.github/`（CI + Issue/PR 模板）；`package.json` 移除 `private` 并补 `engines.node >= 24`；修正 README 过期数字与 Node 版本要求；删除本文件中硬编码的本机绝对路径。**隐私核查结论与未决项见 `devlog/sessions/2026-10-04-opensource-prep.md`** |

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 先看常见问题排查
+    url: https://github.com/Direction12/ClipHistory/blob/main/docs/构建与运行.md
+    about: 安装、构建、打包类问题大多已在此文档 §10 列出。
+  - name: 已知限制说明
+    url: https://github.com/Direction12/ClipHistory/blob/main/README.md
+    about: SmartScreen 拦截、提权窗口无法自动粘贴、删除不进回收站等，均为已知限制。

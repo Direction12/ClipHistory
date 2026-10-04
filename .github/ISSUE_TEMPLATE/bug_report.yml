@@ -1,0 +1,65 @@
+name: Bug 报告
+description: 报告一个可复现的缺陷
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先确认你使用的是**最新代码**，并已翻阅
+        [docs/构建与运行.md §10 常见问题排查](../../blob/main/docs/构建与运行.md)——
+        部分现象（SmartScreen 拦截、提权窗口无法自动粘贴等）属于已记录的已知限制，不是缺陷。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      description: 免安装包版本号，或 `git rev-parse --short HEAD` 的结果
+      placeholder: 例如 0.1.0 或 e26aff7
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 系统环境
+      description: Windows 版本（含 64 位）与 Node.js 版本（仅从源码运行时需要）
+      placeholder: 例如 Windows 11 24H2 x64；Node v24.21.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请写成可照做的编号步骤
+      placeholder: |
+        1. 打开应用
+        2. 复制一段文字
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 有报错信息请原文粘贴。若涉及界面问题，附截图会快很多。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 自检输出（可选）
+      description: |
+        从源码运行时，`npm run smoke` 的输出最有诊断价值。
+        **注意脱敏**：不要粘贴你的真实剪贴板内容。
+    validations:
+      required: false

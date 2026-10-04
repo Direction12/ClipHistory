@@ -3,8 +3,20 @@
   "productName": "ClipHistory",
   "version": "0.1.0",
   "description": "历史粘贴（ClipHistory）—— Windows 本地剪贴板历史工具，记录文字与图片",
-  "private": true,
   "license": "MIT",
+  "author": "Direction",
+  "keywords": [
+    "clipboard",
+    "clipboard-manager",
+    "clipboard-history",
+    "electron",
+    "windows",
+    "typescript",
+    "剪贴板"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
   "main": "dist/main/main.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.renderer-build.json && tsc -p tsconfig.test.json",
