@@ -4,7 +4,7 @@
 |---|---|
 | 日期 | 2026-10-04 |
 | 阶段 | 非阶段任务 · 开源前的隐私核查与仓库规范化 |
-| 状态 | 🟡 部分完成（无争议项已落地；两项需用户决策的历史/披露问题按用户决定「维持现状」） |
+| 状态 | ✅ 完成（规范项已落地并**已发布到 GitHub**；两项需用户决策的历史/披露问题按用户决定「维持现状」） |
 | 涉及标准文件 | `CLAUDE.md`（工作目录行 + 修订记录）；`README.md`（数字与 Node 版本） |
 
 ---
@@ -53,7 +53,9 @@
 | `appId` 含用户 handle | `package.json` 的 `"appId": "com.direction.cliphistory"` | 仅提示可改中性域名 | ⚠️ **未改**（属产品标识，改动会影响已分发产物的升级路径，需用户单独拍板，见 P8-04） |
 | README 数字与事实不符 | 声称 153 单测 / 62 断言，实际 166 / 64 | 以实跑结果更正 | ✅ 已修正 |
 | README 的 Node 版本要求错误 | 声称 `≥ 20`，但 `test/run-tests.mjs` 依赖 `node:module` 的 `registerHooks`（需 Node ≥ 24），照 README 装 Node 20 会直接跑不了测试 | 改为 `≥ 24`，并同步 `CLAUDE.md` 与 `engines` | ✅ 已修正。**这是会直接劝退贡献者的错误** |
-| Issue 模板中的仓库地址 | `config.yml` 需要绝对 URL | 用 `OWNER/REPO` 占位 | ⚠️ 待推送后替换，见 P8-01 |
+| Issue 模板中的仓库地址 | `config.yml` 需要绝对 URL | 用 `OWNER/REPO` 占位 | ✅ 已替换为 `Direction12/ClipHistory`，见 P8-01 |
+| **首次推送被 GitHub 拒绝** | `refusing to allow an OAuth App to create or update workflow '.github/workflows/ci.yml' without 'workflow' scope` | 执行 `gh auth refresh -h github.com -s workflow` 补 scope 后重推成功 | ✅ 已解决。**OAuth App token 推送 `.github/workflows/` 必须显式带 `workflow` scope**；其余 22 个提交不含 workflow，故已先推上去 |
+| 本机 curl 访问 GitHub 报 exit 35 | `schannel: ... CRYPT_E_NO_REVOCATION_CHECK`（加 `--ssl-no-revoke` 即通） | 查明本机用 **Steam++（Watt Toolkit）** 加速 GitHub：hosts 把 30 余个 GitHub 域名指向 `127.0.0.1`，由 `Steam++.Accelerator` 在本机 443 端口反代 | ✅ 已定位。curl 需 `--ssl-no-revoke`；git 默认不检查吊销故不受影响。**注意 hosts 被改写属该工具的正常行为** |
 
 ## 5. 对标准文件的改动
 
@@ -69,10 +71,14 @@
 
 ## 6. 下一阶段入口
 
-- **下一步从哪开始**：推送前先处理 `devlog/待办事项.md` 的 P8-01（替换 `OWNER/REPO` 占位）。建议推送顺序：先在 GitHub 建**空仓库**（不勾 README/License，避免无关的初始提交）→ `git remote add origin` → `git push -u origin main`。
-- **推送前务必确认**：`git status --ignored --short` 只应出现 `dist/`、`node_modules/`、`release/` 三个被忽略项；**不要**用 `git add -f` 强行加入任何被忽略路径（`release/` 有 367.7MB，会撞 GitHub 100MB 单文件上限并永久留在历史里）。
-- **前置条件**：无阻塞项。CI 已在本机验证可通过。
-- **需要用户确认的问题**：
-  1. **P8-02**：是否补 1 张界面截图 + 1 个自动粘贴 GIF（README 目前**一张图都没有**，对开源第一印象影响最大，但需要你在真实桌面录）。
-  2. **P8-03**：是否把 `docs/构建与运行.md` §2.1–§2.3 的「本机沙箱」内容重构为「通用安装 + 附录：受限环境」。外部贡献者按现有文档操作会困惑——他们的 `npm install` 不会报 EPERM。
+- **成果**：仓库已发布到 <https://github.com/Direction12/ClipHistory>（**公开**），**23 个提交全部推送**，GitHub 已识别 MIT 许可，CI 自动触发（`.github/workflows/ci.yml`）。
+- **发布过程（可复现要点）**：
+  1. 本机 GitHub 通路依赖 Steam++：hosts 被指向 `127.0.0.1`，curl 必须加 `--ssl-no-revoke`；
+  2. 用 gh CLI 设备码登录（`gh auth login --web`，token 存 **keyring**，非明文文件）；
+  3. **必须补 `workflow` scope**（`gh auth refresh -s workflow`），否则含 `.github/workflows/` 的提交会被 GitHub 拒绝；
+  4. 凭据助手用 `credential.https://github.com.helper` 配成**仓库局部**，避免改动全局 git 配置（已核实 `git config --global --list` 为空）。
+- **推送后须确认**：`git status --ignored --short` 只应出现 `dist/`、`node_modules/`、`release/`；**不要**用 `git add -f` 加入被忽略路径（`release/` 有 367.7MB，会撞 GitHub 100MB 上限并永久留在历史里）。
+- **剩余可选优化（不阻塞开源，待用户决定）**：
+  1. **P8-02**：README 补 1 张界面截图 + 1 个自动粘贴 GIF（目前**一张图都没有**）。
+  2. **P8-03**：把 `docs/构建与运行.md` §2.1–§2.3 的「本机沙箱」内容重构为「通用安装 + 附录：受限环境」。外部贡献者按现有文档操作会困惑——他们的 `npm install` 不会报 EPERM。
   3. **P8-04**：`appId` 是否改为中性域名。
