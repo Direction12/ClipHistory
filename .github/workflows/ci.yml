@@ -19,12 +19,12 @@ jobs:
 
     steps:
       - name: 检出
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 测试入口 test/run-tests.mjs 依赖 node:module 的 registerHooks，
       # 该 API 要求 Node >= 24（见 docs/构建与运行.md §2.4）。
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
